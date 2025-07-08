@@ -70,20 +70,19 @@ def train_exit_model(df, target_col='Exit'):
     
     df = df.copy()
 
-    # --- SMARTER CLEANING STEP ---
+    # --- CORRECTED FULL CLEANING STEP ---
+    # Iterate over all columns to find and clean potential numeric columns
     for col in df.columns:
         if df[col].dtype == 'object':
-            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower():
+            # Clean if the column name suggests it's a monetary value or if it contains numeric-like strings
+            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower() or df[col].str.contains(r'[\d,]', na=False).any():
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
                     errors='coerce'
                 )
 
     # --- AUTOMATIC FEATURE SELECTION ---
-    # Use all columns except the target and identifiers
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
-    
-    # Ensure all selected feature columns exist
     feature_cols = [col for col in feature_cols if col in df.columns]
     
     df_processed = pd.get_dummies(df[feature_cols]).fillna(0)
@@ -96,7 +95,6 @@ def train_exit_model(df, target_col='Exit'):
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # --- UPGRADED MODEL ---
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     st.session_state.trained_model = model
@@ -116,10 +114,10 @@ def predict_with_saved_model(df):
     
     df = df.copy()
     
-    # --- SMARTER CLEANING for prediction data ---
+    # --- CORRECTED FULL CLEANING for prediction data ---
     for col in df.columns:
         if df[col].dtype == 'object':
-            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower():
+            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower() or df[col].str.contains(r'[\d,]', na=False).any():
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
                     errors='coerce'
