@@ -66,17 +66,15 @@ def generate_code(model, prompt, df_dict):
 def clean_and_prepare_data(df):
     """A robust function to clean data before ML or display."""
     df = df.copy()
-    # --- EXPLICIT CLEANING ---
-    # Explicitly define columns that are known to contain monetary values
     monetary_cols = [
         'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
-        'Amount', 'Valuation' # Add other potential money columns here
+        'Amount', 'Valuation'
     ]
     
-    for col in monetary_cols:
-        if col in df.columns:
-            # Only process if the column exists and is of object type
-            if df[col].dtype == 'object':
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            # Clean if column is explicitly monetary OR contains number-like patterns
+            if col in monetary_cols or (df[col].str.contains(r'[\d,]', na=False).any() and not df[col].str.contains(r'[a-zA-Z]{2,}', na=False).any()):
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
                     errors='coerce'
@@ -90,11 +88,10 @@ def train_exit_model(df, target_col='Exit'):
     
     df_cleaned = clean_and_prepare_data(df)
 
-    # --- AUTOMATIC FEATURE SELECTION ---
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
     
-    df_for_ml = pd.get_dummies(df_cleaned[feature_cols]).fillna(0)
+    df_for_ml = pd.get_dummies(df_cleaned[feature_cols], dummy_na=True).fillna(0)
     st.session_state.trained_features = df_for_ml.columns.tolist()
 
     X = df_for_ml
@@ -188,19 +185,15 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     
                     try:
                         exec(code_to_run, globals(), local_vars)
-                        st.session_state.df_dict = local_vars['df_dict']
                         
                         if 'message' in local_vars:
                             response_content = local_vars['message']
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
+                                # --- FINAL FIX IS HERE ---
+                                # The function returns the cleaned df. We update our main dict with it.
+                                st.session_state.df_dict[primary_df_name] = df_result
                                 response_data = df_result.head()
-                                if "predict" in prompt:
-                                    predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
-                                    if predicted_df_name_match:
-                                        predicted_df_name = predicted_df_name_match.group(1)
-                                        if predicted_df_name in st.session_state.df_dict:
-                                            st.session_state.df_dict[predicted_df_name] = df_result
                         else:
                             response_content = "✅ Command executed."
 
