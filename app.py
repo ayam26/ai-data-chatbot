@@ -63,22 +63,20 @@ def generate_code(model, prompt, df_dict):
 
 # --- Machine Learning Functions ---
 
-def clean_and_prepare_data(df):
-    """A robust function to clean data before ML or display."""
+def clean_monetary_columns(df):
+    """A robust function to clean known monetary columns."""
     df = df.copy()
+    # Explicitly list columns that are known to contain currency data
     monetary_cols = [
         'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
         'Amount', 'Valuation'
     ]
-    
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            # Clean if column is explicitly monetary OR contains number-like patterns
-            if col in monetary_cols or (df[col].str.contains(r'[\d,]', na=False).any() and not df[col].str.contains(r'[a-zA-Z]{2,}', na=False).any()):
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
-                    errors='coerce'
-                )
+    for col in monetary_cols:
+        if col in df.columns and df[col].dtype == 'object':
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
+                errors='coerce'
+            )
     return df
 
 def train_exit_model(df, target_col='Exit'):
@@ -86,7 +84,7 @@ def train_exit_model(df, target_col='Exit'):
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     
-    df_cleaned = clean_and_prepare_data(df)
+    df_cleaned = clean_monetary_columns(df)
 
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
@@ -118,7 +116,7 @@ def predict_with_saved_model(df):
     model = st.session_state.trained_model
     trained_features = st.session_state.trained_features
     
-    df_cleaned = clean_and_prepare_data(df)
+    df_cleaned = clean_monetary_columns(df)
     
     df_processed = pd.get_dummies(df_cleaned).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
@@ -190,8 +188,7 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                             response_content = local_vars['message']
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
-                                # --- FINAL FIX IS HERE ---
-                                # The function returns the cleaned df. We update our main dict with it.
+                                # Update the main dictionary with the cleaned and processed dataframe
                                 st.session_state.df_dict[primary_df_name] = df_result
                                 response_data = df_result.head()
                         else:
