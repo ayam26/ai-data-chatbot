@@ -83,22 +83,19 @@ def clean_monetary_columns(df):
 def train_exit_model(target_col='Exit'):
     """Trains a model using the primary dataframe from session state."""
     primary_df_name = list(st.session_state.df_dict.keys())[0]
-    df = st.session_state.df_dict[primary_df_name]
+    df = st.session_state.df_dict[primary_df_name] # Pulls the already-cleaned data
 
     if target_col not in df.columns:
         return f"Error: Training data must have a '{target_col}' column."
     
-    # Data is already cleaned on upload, so we can use it directly.
-    df_cleaned = df
-
-    feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
-    feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
+    feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
+    feature_cols = [col for col in feature_cols if col in df.columns]
     
-    df_for_ml = pd.get_dummies(df_cleaned[feature_cols], dummy_na=True).fillna(0)
+    df_for_ml = pd.get_dummies(df[feature_cols], dummy_na=True).fillna(0)
     st.session_state.trained_features = df_for_ml.columns.tolist()
 
     X = df_for_ml
-    y = df_cleaned[target_col].fillna(0)
+    y = df[target_col].fillna(0)
     
     y, X = y.align(X, join='inner', axis=0)
 
