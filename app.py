@@ -26,7 +26,7 @@ def get_ai_model():
 
 def generate_code(model, prompt, df_dict):
     """Uses the LLM to convert a prompt into executable code."""
-    if model is None: return "st.error('AI model is not configured.')"
+    if model is None: return "ERROR: AI model is not configured."
     df_names = list(df_dict.keys())
     primary_df_columns = list(df_dict.get(df_names[0], pd.DataFrame()).columns)
 
@@ -59,7 +59,8 @@ def generate_code(model, prompt, df_dict):
         response = model.generate_content([system_prompt, prompt])
         return response.text.strip()
     except Exception as e:
-        return f"st.error('❌ AI generation failed: {e}')"
+        # Return a simple error string instead of code
+        return f"ERROR: AI generation failed: {e}"
 
 # --- Machine Learning Functions ---
 
@@ -183,37 +184,40 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                 df_copy = st.session_state.df_dict[primary_df_name].copy()
 
                 code_to_run = generate_code(model, prompt, st.session_state.df_dict)
-                st.code(code_to_run, language="python")
                 
-                local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
-                response_content, response_data = "An unknown action occurred.", None
-                
-                try:
-                    exec(code_to_run, globals(), local_vars)
-                    st.session_state.df_dict = local_vars['df_dict']
-                    
-                    if 'message' in local_vars:
-                        response_content = local_vars['message']
-                        df_result = local_vars.get('df')
-                        # Check if df_result is a DataFrame before calling .head()
-                        if isinstance(df_result, pd.DataFrame):
-                            response_data = df_result.head()
-                            # If a prediction was made, update the specific dataframe in the dict
-                            if "predict" in prompt:
-                                predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
-                                if predicted_df_name_match:
-                                    predicted_df_name = predicted_df_name_match.group(1)
-                                    if predicted_df_name in st.session_state.df_dict:
-                                        st.session_state.df_dict[predicted_df_name] = df_result
-
-                    else:
-                        response_content = "✅ Command executed."
-
-                    st.markdown(response_content)
-                    if response_data is not None: st.dataframe(response_data)
-
-                except Exception as e:
-                    response_content = f"❌ Error executing code: {e}"
+                # --- UPDATED ERROR HANDLING ---
+                # Check if the AI returned an error message before trying to execute it
+                if code_to_run.startswith("ERROR:"):
+                    response_content = f"❌ {code_to_run}"
                     st.error(response_content)
+                else:
+                    st.code(code_to_run, language="python")
+                    local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                    response_content, response_data = "An unknown action occurred.", None
+                    
+                    try:
+                        exec(code_to_run, globals(), local_vars)
+                        st.session_state.df_dict = local_vars['df_dict']
+                        
+                        if 'message' in local_vars:
+                            response_content = local_vars['message']
+                            df_result = local_vars.get('df')
+                            if isinstance(df_result, pd.DataFrame):
+                                response_data = df_result.head()
+                                if "predict" in prompt:
+                                    predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
+                                    if predicted_df_name_match:
+                                        predicted_df_name = predicted_df_name_match.group(1)
+                                        if predicted_df_name in st.session_state.df_dict:
+                                            st.session_state.df_dict[predicted_df_name] = df_result
+                        else:
+                            response_content = "✅ Command executed."
+
+                        st.markdown(response_content)
+                        if response_data is not None: st.dataframe(response_data)
+
+                    except Exception as e:
+                        response_content = f"❌ Error executing code: {e}"
+                        st.error(response_content)
             
             st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
