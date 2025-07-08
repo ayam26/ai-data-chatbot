@@ -5,7 +5,7 @@ import google.generativeai as genai
 import re
 import plotly.express as px
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 
 # --- Core AI and Helper Functions ---
@@ -41,13 +41,13 @@ def generate_code(model, prompt, df_dict):
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       `df, message = train_exit_model(df, feature_cols=['FEATURE_1', 'FEATURE_2'])`
+       `df, message = train_exit_model(df)`
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
        `df, message = predict_with_saved_model(df)`
 
     Examples:
-    User prompt: train a model to predict exits using Amount and Valuation as features
-    Generated code: df, message = train_exit_model(df, feature_cols=['Amount', 'Valuation'])
+    User prompt: train a model to predict exits
+    Generated code: df, message = train_exit_model(df)
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -63,44 +63,48 @@ def generate_code(model, prompt, df_dict):
 
 # --- Machine Learning Functions ---
 
-def train_exit_model(df, feature_cols, target_col='Exit'):
-    """Trains a model and saves it to the session state."""
+def train_exit_model(df, target_col='Exit'):
+    """Trains a model using all available columns and saves it to the session state."""
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     
     df = df.copy()
 
     # --- SMARTER CLEANING STEP ---
-    # Only clean columns that are specified as features and look like currency/numbers.
-    for col in feature_cols:
-        if col in df.columns and df[col].dtype == 'object':
-            # Check if the column name suggests it's a monetary value
+    for col in df.columns:
+        if df[col].dtype == 'object':
             if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower():
                 df[col] = pd.to_numeric(
                     df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
                     errors='coerce'
                 )
 
-    # Now, the rest of the function can proceed with a cleaner dataframe
+    # --- AUTOMATIC FEATURE SELECTION ---
+    # Use all columns except the target and identifiers
+    feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
+    
+    # Ensure all selected feature columns exist
+    feature_cols = [col for col in feature_cols if col in df.columns]
+    
     df_processed = pd.get_dummies(df[feature_cols]).fillna(0)
     st.session_state.trained_features = df_processed.columns.tolist()
 
     X = df_processed
     y = df[target_col].fillna(0)
     
-    # Align data to ensure rows match after any potential cleaning/dropping
     y = y[X.index]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    model = LogisticRegression(max_iter=1000)
+    # --- UPGRADED MODEL ---
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ Model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
     
-    return df, message # Return the dataframe with cleaned numeric columns
+    return df, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
