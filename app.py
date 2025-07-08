@@ -81,7 +81,7 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns the original dataframe and a success message."""
+    """Trains a model and returns the CLEANED dataframe and a success message."""
     if target_col not in df.columns:
         return df, f"Error: Training data must have a '{target_col}' column."
     
@@ -107,7 +107,8 @@ def train_exit_model(df, target_col='Exit'):
     accuracy = accuracy_score(y_test, model.predict(X_test))
     message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
     
-    return df, message # Return the original, un-ML-prepped dataframe
+    # --- FINAL FIX IS HERE: Return the CLEANED dataframe ---
+    return df_cleaned, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -147,7 +148,6 @@ with st.sidebar:
         st.session_state.df_dict = {}
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
-            # Load raw data, cleaning will happen on demand
             df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
             st.session_state.df_dict[file_key] = df
             st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
@@ -202,9 +202,8 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                                 response_content = f"✅ Command executed. Result: {df_result}"
 
                         st.markdown(response_content)
-                        # --- FINAL FIX IS HERE: Always clean the data before displaying it ---
                         if response_data is not None:
-                            st.dataframe(clean_monetary_columns(response_data))
+                            st.dataframe(response_data)
 
                     except Exception as e:
                         response_content = f"❌ Error executing code: {e}"
