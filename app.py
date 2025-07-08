@@ -63,7 +63,7 @@ def generate_code(model, prompt, df_dict):
 
 # --- Machine Learning Functions ---
 
-def train_exit_model(df, feature_cols, target_col='Exited'):
+def train_exit_model(df, feature_cols, target_col='Exit'): # <--- FIX IS HERE
     """Trains a model and saves it to the session state."""
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
