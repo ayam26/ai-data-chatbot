@@ -42,13 +42,13 @@ def generate_code(model, prompt, df_dict):
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       message = train_exit_model()
+       message = train_exit_model(df)
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
        df, message = predict_with_saved_model(df)
 
     Examples:
     User prompt: train a model to predict exits
-    Generated code: message = train_exit_model()
+    Generated code: message = train_exit_model(df)
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -80,11 +80,8 @@ def clean_monetary_columns(df):
             ).fillna(0)
     return df
 
-def train_exit_model(target_col='Exit'):
-    """Trains a model using the primary dataframe from session state."""
-    primary_df_name = list(st.session_state.df_dict.keys())[0]
-    df = st.session_state.df_dict[primary_df_name] # Pulls the already-cleaned data
-
+def train_exit_model(df, target_col='Exit'):
+    """Trains a model and saves it to the session state."""
     if target_col not in df.columns:
         return f"Error: Training data must have a '{target_col}' column."
     
@@ -111,20 +108,17 @@ def train_exit_model(target_col='Exit'):
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
-        return None, "Error: You must train a model first before making predictions."
+        return df, "Error: You must train a model first before making predictions."
     
     model = st.session_state.trained_model
     trained_features = st.session_state.trained_features
     
-    # Data is already cleaned on upload.
-    df_cleaned = df
-    
-    df_processed = pd.get_dummies(df_cleaned).fillna(0)
+    df_processed = pd.get_dummies(df).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
     
-    df_cleaned['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
+    df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
     message = f"✅ Predictions made using the saved model. Added 'Exit_Probability' column."
-    return df_cleaned, message
+    return df, message
 
 # --- Streamlit App UI and Logic ---
 
@@ -148,9 +142,8 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
             df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            # --- ROBUST FIX: Clean data immediately after loading ---
-            st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
-            st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
+            st.session_state.df_dict[file_key] = df_raw # Store raw data
+            st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
     
     st.header("Analysis Status")
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
@@ -159,7 +152,9 @@ with st.sidebar:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
-        if message.get("data") is not None: st.dataframe(message["data"])
+        if message.get("data") is not None:
+            # Clean before displaying from history
+            st.dataframe(clean_monetary_columns(message["data"]))
 
 if prompt := st.chat_input("Train a model or make a prediction?"):
     st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
@@ -171,7 +166,8 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
         else:
             with st.spinner("🧠 AI is thinking..."):
                 primary_df_name = list(st.session_state.df_dict.keys())[0]
-                df_copy = st.session_state.df_dict[primary_df_name].copy()
+                # Always start with a fresh, clean copy for the operation
+                df_cleaned = clean_monetary_columns(st.session_state.df_dict[primary_df_name])
 
                 code_to_run = generate_code(model, prompt, st.session_state.df_dict)
                 
@@ -180,7 +176,7 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     st.error(response_content)
                 else:
                     st.code(code_to_run, language="python")
-                    local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                    local_vars = {"df": df_cleaned, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                     response_content, response_data = "An unknown action occurred.", None
                     
                     try:
@@ -203,7 +199,8 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
 
                         st.markdown(response_content)
                         if response_data is not None:
-                            st.dataframe(response_data)
+                            # Final safety clean before display
+                            st.dataframe(clean_monetary_columns(response_data))
 
                     except Exception as e:
                         response_content = f"❌ Error executing code: {e}"
