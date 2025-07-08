@@ -63,17 +63,31 @@ def generate_code(model, prompt, df_dict):
 
 # --- Machine Learning Functions ---
 
-def train_exit_model(df, feature_cols, target_col='Exit'): # <--- FIX IS HERE
+def train_exit_model(df, feature_cols, target_col='Exit'):
     """Trains a model and saves it to the session state."""
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     df = df.copy()
-    # Preprocessing
+
+    # --- NEW: Data Cleaning Step ---
+    # Clean specified feature columns before using them.
+    for col in feature_cols:
+        if col in df.columns and df[col].dtype == 'object':
+            # Remove currency symbols, commas, and convert to numeric
+            # This handles values like '₹300,000,000', 'SGD10,000,000 ', etc.
+            df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Preprocessing for the model
     df_processed = pd.get_dummies(df[feature_cols]).fillna(0)
     st.session_state.trained_features = df_processed.columns.tolist() # Save the feature list
 
     X = df_processed
-    y = df[target_col]
+    y = df[target_col].fillna(0) # Ensure target has no NaNs
+    
+    # Align data - crucial step
+    X, y = X.align(y, join='inner', axis=0)
+
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     model = LogisticRegression(max_iter=1000)
@@ -93,6 +107,14 @@ def predict_with_saved_model(df):
     trained_features = st.session_state.trained_features
     
     df = df.copy()
+    
+    # --- NEW: Data Cleaning Step for prediction data ---
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            if df[col].astype(str).str.contains(r'[^\d.]').any():
+                df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
     # Preprocess the new data in the exact same way as the training data
     df_processed = pd.get_dummies(df).fillna(0)
     # Align columns - crucial for prediction
