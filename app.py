@@ -19,7 +19,6 @@ def get_ai_model():
             st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
             return None
         genai.configure(api_key=api_key)
-        # --- MODEL UPGRADED HERE ---
         return genai.GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
@@ -60,31 +59,30 @@ def generate_code(model, prompt, df_dict):
         response = model.generate_content([system_prompt, prompt])
         return response.text.strip()
     except Exception as e:
-        # Return a simple error string instead of code
         return f"ERROR: AI generation failed: {e}"
 
 # --- Machine Learning Functions ---
+
+def clean_monetary_columns(df):
+    """Explicitly cleans known monetary columns."""
+    df = df.copy()
+    # List of columns that might contain currency or formatted numbers
+    money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount', 'Amount', 'Valuation']
+    
+    for col in money_cols:
+        if col in df.columns and df[col].dtype == 'object':
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
+                errors='coerce'
+            )
+    return df
 
 def train_exit_model(df, target_col='Exit'):
     """Trains a model using all available columns and saves it to the session state."""
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     
-    df_cleaned = df.copy()
-
-    # --- MORE ROBUST CLEANING STEP ---
-    for col in df_cleaned.columns:
-        if df_cleaned[col].dtype == 'object':
-            # Check if the column contains any characters that suggest it's a monetary value
-            if df_cleaned[col].astype(str).str.contains(r'[\d,₹$SGD]', na=False).any():
-                # Attempt to convert to numeric after removing currency symbols and commas
-                cleaned_series = pd.to_numeric(
-                    df_cleaned[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
-                    errors='coerce'
-                )
-                # Only replace the column if the cleaning was successful to avoid destroying text columns
-                if not cleaned_series.isna().all():
-                    df_cleaned[col] = cleaned_series
+    df_cleaned = clean_monetary_columns(df)
 
     # --- AUTOMATIC FEATURE SELECTION ---
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
@@ -96,7 +94,6 @@ def train_exit_model(df, target_col='Exit'):
     X = df_for_ml
     y = df_cleaned[target_col].fillna(0)
     
-    # Align data to ensure rows match after any potential cleaning/dropping
     y, X = y.align(X, join='inner', axis=0)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -118,25 +115,14 @@ def predict_with_saved_model(df):
     model = st.session_state.trained_model
     trained_features = st.session_state.trained_features
     
-    df = df.copy()
+    df_cleaned = clean_monetary_columns(df)
     
-    # --- MORE ROBUST CLEANING for prediction data ---
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            if df[col].astype(str).str.contains(r'[\d,₹$SGD]', na=False).any():
-                cleaned_series = pd.to_numeric(
-                    df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
-                    errors='coerce'
-                )
-                if not cleaned_series.isna().all():
-                    df[col] = cleaned_series
-
-    df_processed = pd.get_dummies(df).fillna(0)
+    df_processed = pd.get_dummies(df_cleaned).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
     
-    df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
+    df_cleaned['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
     message = f"✅ Predictions made using the saved model. Added 'Exit_Probability' column."
-    return df, message
+    return df_cleaned, message
 
 # --- Streamlit App UI and Logic ---
 
@@ -186,8 +172,6 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
 
                 code_to_run = generate_code(model, prompt, st.session_state.df_dict)
                 
-                # --- UPDATED ERROR HANDLING ---
-                # Check if the AI returned an error message before trying to execute it
                 if code_to_run.startswith("ERROR:"):
                     response_content = f"❌ {code_to_run}"
                     st.error(response_content)
