@@ -1,5 +1,3 @@
-# app.py (v10 with Model Persistence)
-
 import streamlit as st
 import pandas as pd
 import os
@@ -14,27 +12,32 @@ from sklearn.metrics import accuracy_score
 
 @st.cache_resource
 def get_ai_model():
-    """Configures and returns the AI model."""
+    """Configures and returns the AI model, cached for performance."""
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        if not api_key:
+            st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
+            return None
         genai.configure(api_key=api_key)
         return genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
-        st.error(f"❌ Failed to configure AI model: {e}"); return None
+        st.error(f"❌ Failed to configure AI model: {e}")
+        return None
 
 def generate_code(model, prompt, df_dict):
     """Uses the LLM to convert a prompt into executable code."""
+    if model is None: return "st.error('AI model is not configured.')"
     df_names = list(df_dict.keys())
     primary_df_columns = list(df_dict.get(df_names[0], pd.DataFrame()).columns)
 
-    # --- UPDATED: New System Prompt with separate Train/Predict ---
     system_prompt = f"""
-    You are an expert Python data analyst. Your task is to convert a user's request into a single, executable line of Python code.
+    You are an expert Python data analyst. Your task is to convert a user's request into a single,
+    executable line of Python code using pandas, plotly express, or a custom function.
 
     - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
     - The primary DataFrame is `df = df_dict['{df_names[0]}']` if it exists.
-    - Available columns in the primary DataFrame are: {primary_df_columns}.
     - The output MUST be a single line of code. Do NOT use markdown or comments.
+    - Available columns in the primary DataFrame are: {primary_df_columns}.
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
@@ -83,7 +86,7 @@ def train_exit_model(df, feature_cols, target_col='Exited'):
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
-    if 'trained_model' not in st.session_state:
+    if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         return None, "Error: You must train a model first before making predictions."
     
     model = st.session_state.trained_model
@@ -111,6 +114,7 @@ model = get_ai_model()
 if "df_dict" not in st.session_state: st.session_state.df_dict = {}
 if "messages" not in st.session_state: st.session_state.messages = []
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
+if "trained_features" not in st.session_state: st.session_state.trained_features = None # Initialization fix
 
 with st.sidebar:
     st.header("Upload Your Data")
@@ -160,8 +164,11 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                         # If a prediction was made, update the specific dataframe in the dict
                         if "predict" in prompt:
                             # Figure out which df was predicted on
-                            predicted_df_name = re.search(r"on the '(.*?)'", prompt).group(1)
-                            st.session_state.df_dict[predicted_df_name] = local_vars.get('df')
+                            predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
+                            if predicted_df_name_match:
+                                predicted_df_name = predicted_df_name_match.group(1)
+                                if predicted_df_name in st.session_state.df_dict:
+                                    st.session_state.df_dict[predicted_df_name] = local_vars.get('df')
 
                     # (Add back other command handlers if needed)
                     else:
