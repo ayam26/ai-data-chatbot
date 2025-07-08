@@ -42,13 +42,13 @@ def generate_code(model, prompt, df_dict):
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       message = train_exit_model()
+       df, message = train_exit_model(df)
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
        df, message = predict_with_saved_model(df)
 
     Examples:
     User prompt: train a model to predict exits
-    Generated code: message = train_exit_model()
+    Generated code: df, message = train_exit_model(df)
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -80,16 +80,12 @@ def clean_monetary_columns(df):
             )
     return df
 
-def train_exit_model(target_col='Exit'):
-    """Trains a model using the primary dataframe from session state."""
-    primary_df_name = list(st.session_state.df_dict.keys())[0]
-    df = st.session_state.df_dict[primary_df_name]
-
+def train_exit_model(df, target_col='Exit'):
+    """Trains a model and returns the cleaned dataframe and a message."""
     if target_col not in df.columns:
-        return f"Error: Training data must have a '{target_col}' column."
+        return None, f"Error: Training data must have a '{target_col}' column."
     
     df_cleaned = clean_monetary_columns(df)
-    st.session_state.df_dict[primary_df_name] = df_cleaned # Update state with cleaned data
 
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
@@ -109,7 +105,9 @@ def train_exit_model(target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    
+    return df_cleaned, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -192,18 +190,11 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                         
                         if 'message' in local_vars:
                             response_content = local_vars['message']
-                            if "train" in prompt:
-                                # After training, the cleaned df is in the session state
-                                response_data = st.session_state.df_dict[primary_df_name].head()
-                            elif "predict" in prompt:
-                                df_result = local_vars.get('df')
-                                if isinstance(df_result, pd.DataFrame):
-                                    # Find which df was predicted on and update it
-                                    predicted_df_name_match = re.search(r"df_dict\['(.*?)'\]", code_to_run)
-                                    if predicted_df_name_match:
-                                        predicted_df_name = predicted_df_name_match.group(1)
-                                        st.session_state.df_dict[predicted_df_name] = df_result
-                                    response_data = df_result.head()
+                            df_result = local_vars.get('df')
+                            if isinstance(df_result, pd.DataFrame):
+                                # Update the main dictionary with the processed dataframe
+                                st.session_state.df_dict[primary_df_name] = df_result
+                                response_data = df_result.head()
                         else:
                             # Handle other pandas/plotly commands
                             df_result = local_vars.get('df')
