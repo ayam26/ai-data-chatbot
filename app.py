@@ -41,13 +41,13 @@ def generate_code(model, prompt, df_dict):
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       `df, message = train_exit_model(df)`
+       `message = train_exit_model(df)`
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
        `df, message = predict_with_saved_model(df)`
 
     Examples:
     User prompt: train a model to predict exits
-    Generated code: df, message = train_exit_model(df)
+    Generated code: message = train_exit_model(df)
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -66,7 +66,6 @@ def generate_code(model, prompt, df_dict):
 def clean_monetary_columns(df):
     """A robust function to clean known monetary columns."""
     df = df.copy()
-    # Explicitly define columns that are known to contain currency data
     monetary_cols = [
         'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
         'Amount', 'Valuation'
@@ -81,13 +80,12 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model using all available columns and saves it to the session state."""
+    """Trains a model and saves it to the session state."""
     if target_col not in df.columns:
-        return None, f"Error: Training data must have a '{target_col}' column."
+        return f"Error: Training data must have a '{target_col}' column."
     
     df_cleaned = clean_monetary_columns(df)
 
-    # --- AUTOMATIC FEATURE SELECTION ---
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
     
@@ -106,9 +104,7 @@ def train_exit_model(df, target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    
-    return df_cleaned, message
+    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -186,16 +182,23 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     try:
                         exec(code_to_run, globals(), local_vars)
                         
+                        # --- FINAL FIX IS HERE ---
+                        # After exec, check what happened and handle the dataframe state explicitly
+                        
                         if 'message' in local_vars:
                             response_content = local_vars['message']
-                            df_result = local_vars.get('df')
-                            if isinstance(df_result, pd.DataFrame):
-                                # --- FINAL FIX IS HERE ---
-                                # Explicitly clean the dataframe before displaying it.
-                                df_display = clean_monetary_columns(df_result)
-                                st.session_state.df_dict[primary_df_name] = df_display
+                            # If the command was training, the original df is unchanged but we should show the cleaned version
+                            if "train" in prompt:
+                                df_display = clean_monetary_columns(df_copy)
                                 response_data = df_display.head()
+                            # If it was prediction, the df was modified and returned
+                            elif "predict" in prompt:
+                                df_result = local_vars.get('df')
+                                if isinstance(df_result, pd.DataFrame):
+                                    st.session_state.df_dict[primary_df_name] = df_result
+                                    response_data = df_result.head()
                         else:
+                            # Handle other pandas/plotly commands
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
