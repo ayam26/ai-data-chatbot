@@ -67,36 +67,40 @@ def train_exit_model(df, feature_cols, target_col='Exit'):
     """Trains a model and saves it to the session state."""
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
+    
     df = df.copy()
 
-    # --- NEW: Data Cleaning Step ---
-    # Clean specified feature columns before using them.
+    # --- SMARTER CLEANING STEP ---
+    # Only clean columns that are specified as features and look like currency/numbers.
     for col in feature_cols:
         if col in df.columns and df[col].dtype == 'object':
-            # Remove currency symbols, commas, and convert to numeric
-            # This handles values like '₹300,000,000', 'SGD10,000,000 ', etc.
-            df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Check if the column name suggests it's a monetary value
+            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower():
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
+                    errors='coerce'
+                )
 
-    # Preprocessing for the model
+    # Now, the rest of the function can proceed with a cleaner dataframe
     df_processed = pd.get_dummies(df[feature_cols]).fillna(0)
-    st.session_state.trained_features = df_processed.columns.tolist() # Save the feature list
+    st.session_state.trained_features = df_processed.columns.tolist()
 
     X = df_processed
-    y = df[target_col].fillna(0) # Ensure target has no NaNs
+    y = df[target_col].fillna(0)
     
-    # Align data - crucial step
-    X, y = X.align(y, join='inner', axis=0)
+    # Align data to ensure rows match after any potential cleaning/dropping
+    y = y[X.index]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     model = LogisticRegression(max_iter=1000)
     model.fit(X_train, y_train)
-    st.session_state.trained_model = model # Save the model in memory
+    st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
     message = f"✅ Model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    return df, message # Return original df, no changes made to it
+    
+    return df, message # Return the dataframe with cleaned numeric columns
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -108,16 +112,16 @@ def predict_with_saved_model(df):
     
     df = df.copy()
     
-    # --- NEW: Data Cleaning Step for prediction data ---
+    # --- SMARTER CLEANING for prediction data ---
     for col in df.columns:
         if df[col].dtype == 'object':
-            if df[col].astype(str).str.contains(r'[^\d.]').any():
-                df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower():
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
+                    errors='coerce'
+                )
 
-    # Preprocess the new data in the exact same way as the training data
     df_processed = pd.get_dummies(df).fillna(0)
-    # Align columns - crucial for prediction
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
     
     df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
