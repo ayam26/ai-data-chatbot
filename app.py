@@ -19,7 +19,8 @@ def get_ai_model():
             st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
             return None
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel('gemini-1.5-flash')
+        # --- MODEL UPGRADED HERE ---
+        return genai.GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
         return None
