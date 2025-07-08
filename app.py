@@ -68,30 +68,34 @@ def train_exit_model(df, target_col='Exit'):
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     
-    df = df.copy()
+    df_cleaned = df.copy()
 
-    # --- CORRECTED FULL CLEANING STEP ---
-    # Iterate over all columns to find and clean potential numeric columns
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            # Clean if the column name suggests it's a monetary value or if it contains numeric-like strings
-            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower() or df[col].str.contains(r'[\d,]', na=False).any():
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
+    # --- MORE ROBUST CLEANING STEP ---
+    for col in df_cleaned.columns:
+        if df_cleaned[col].dtype == 'object':
+            # Check if the column contains any characters that suggest it's a monetary value
+            if df_cleaned[col].astype(str).str.contains(r'[\d,₹$SGD]', na=False).any():
+                # Attempt to convert to numeric after removing currency symbols and commas
+                cleaned_series = pd.to_numeric(
+                    df_cleaned[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
                     errors='coerce'
                 )
+                # Only replace the column if the cleaning was successful to avoid destroying text columns
+                if not cleaned_series.isna().all():
+                    df_cleaned[col] = cleaned_series
 
     # --- AUTOMATIC FEATURE SELECTION ---
-    feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
-    feature_cols = [col for col in feature_cols if col in df.columns]
+    feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
+    feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
     
-    df_processed = pd.get_dummies(df[feature_cols]).fillna(0)
-    st.session_state.trained_features = df_processed.columns.tolist()
+    df_for_ml = pd.get_dummies(df_cleaned[feature_cols]).fillna(0)
+    st.session_state.trained_features = df_for_ml.columns.tolist()
 
-    X = df_processed
-    y = df[target_col].fillna(0)
+    X = df_for_ml
+    y = df_cleaned[target_col].fillna(0)
     
-    y = y[X.index]
+    # Align data to ensure rows match after any potential cleaning/dropping
+    y, X = y.align(X, join='inner', axis=0)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -102,7 +106,7 @@ def train_exit_model(df, target_col='Exit'):
     accuracy = accuracy_score(y_test, model.predict(X_test))
     message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
     
-    return df, message
+    return df_cleaned, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -114,14 +118,16 @@ def predict_with_saved_model(df):
     
     df = df.copy()
     
-    # --- CORRECTED FULL CLEANING for prediction data ---
+    # --- MORE ROBUST CLEANING for prediction data ---
     for col in df.columns:
         if df[col].dtype == 'object':
-            if 'amount' in col.lower() or 'funding' in col.lower() or 'equity' in col.lower() or df[col].str.contains(r'[\d,]', na=False).any():
-                df[col] = pd.to_numeric(
+            if df[col].astype(str).str.contains(r'[\d,₹$SGD]', na=False).any():
+                cleaned_series = pd.to_numeric(
                     df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), 
                     errors='coerce'
                 )
+                if not cleaned_series.isna().all():
+                    df[col] = cleaned_series
 
     df_processed = pd.get_dummies(df).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
