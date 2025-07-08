@@ -42,13 +42,13 @@ def generate_code(model, prompt, df_dict):
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       df, message = train_exit_model(df)
+       message = train_exit_model()
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
        df, message = predict_with_saved_model(df)
 
     Examples:
     User prompt: train a model to predict exits
-    Generated code: df, message = train_exit_model(df)
+    Generated code: message = train_exit_model()
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -80,12 +80,16 @@ def clean_monetary_columns(df):
             ).fillna(0)
     return df
 
-def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns the CLEANED dataframe and a success message."""
+def train_exit_model(target_col='Exit'):
+    """Trains a model using the primary dataframe from session state."""
+    primary_df_name = list(st.session_state.df_dict.keys())[0]
+    df = st.session_state.df_dict[primary_df_name]
+
     if target_col not in df.columns:
-        return df, f"Error: Training data must have a '{target_col}' column."
+        return f"Error: Training data must have a '{target_col}' column."
     
-    df_cleaned = clean_monetary_columns(df)
+    # Data is already cleaned on upload, so we can use it directly.
+    df_cleaned = df
 
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
@@ -105,20 +109,18 @@ def train_exit_model(df, target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    
-    # --- FINAL FIX IS HERE: Return the CLEANED dataframe ---
-    return df_cleaned, message
+    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
-        return df, "Error: You must train a model first before making predictions."
+        return None, "Error: You must train a model first before making predictions."
     
     model = st.session_state.trained_model
     trained_features = st.session_state.trained_features
     
-    df_cleaned = clean_monetary_columns(df)
+    # Data is already cleaned on upload.
+    df_cleaned = df
     
     df_processed = pd.get_dummies(df_cleaned).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
@@ -148,9 +150,10 @@ with st.sidebar:
         st.session_state.df_dict = {}
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
-            df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.session_state.df_dict[file_key] = df
-            st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
+            df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            # --- ROBUST FIX: Clean data immediately after loading ---
+            st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
+            st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
     
     st.header("Analysis Status")
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
@@ -186,14 +189,14 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     try:
                         exec(code_to_run, globals(), local_vars)
                         
-                        df_result = local_vars.get('df')
-                        
                         if 'message' in local_vars:
                             response_content = local_vars['message']
+                            df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
                                 response_data = df_result.head()
                         else:
+                            df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
                                 response_content = "✅ Command executed successfully."
