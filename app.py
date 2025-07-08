@@ -66,19 +66,21 @@ def generate_code(model, prompt, df_dict):
 def clean_and_prepare_data(df):
     """A robust function to clean data before ML or display."""
     df = df.copy()
-    for col in df.columns:
-        # Check if column is object type and not purely numeric
-        if df[col].dtype == 'object':
-            # Remove currency symbols and commas, then convert to numeric
-            # This handles values like '₹300,000,000', 'SGD10,000,000 ', etc.
-            cleaned_col = pd.to_numeric(
-                df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True),
-                errors='coerce'
-            )
-            # Only replace the column if the conversion was successful for at least some values
-            # This prevents destroying purely text columns
-            if cleaned_col.notna().sum() > 0:
-                df[col] = cleaned_col
+    # --- EXPLICIT CLEANING ---
+    # Explicitly define columns that are known to contain monetary values
+    monetary_cols = [
+        'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
+        'Amount', 'Valuation' # Add other potential money columns here
+    ]
+    
+    for col in monetary_cols:
+        if col in df.columns:
+            # Only process if the column exists and is of object type
+            if df[col].dtype == 'object':
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
+                    errors='coerce'
+                )
     return df
 
 def train_exit_model(df, target_col='Exit'):
