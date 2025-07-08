@@ -191,11 +191,11 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 # --- FINAL FIX IS HERE ---
-                                # The function returns the cleaned df. We update our main dict with it.
-                                st.session_state.df_dict[primary_df_name] = df_result
-                                response_data = df_result.head()
+                                # Explicitly clean the dataframe before displaying it.
+                                df_display = clean_monetary_columns(df_result)
+                                st.session_state.df_dict[primary_df_name] = df_display
+                                response_data = df_display.head()
                         else:
-                            # Handle other commands that might not return 'message'
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
@@ -203,7 +203,6 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                                 response_data = df_result.head()
                             else:
                                 response_content = f"✅ Command executed. Result: {df_result}"
-
 
                         st.markdown(response_content)
                         if response_data is not None: st.dataframe(response_data)
