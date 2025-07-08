@@ -114,7 +114,7 @@ model = get_ai_model()
 if "df_dict" not in st.session_state: st.session_state.df_dict = {}
 if "messages" not in st.session_state: st.session_state.messages = []
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
-if "trained_features" not in st.session_state: st.session_state.trained_features = None # Initialization fix
+if "trained_features" not in st.session_state: st.session_state.trained_features = None
 
 with st.sidebar:
     st.header("Upload Your Data")
@@ -160,17 +160,18 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     
                     if 'message' in local_vars:
                         response_content = local_vars['message']
-                        response_data = local_vars.get('df').head()
-                        # If a prediction was made, update the specific dataframe in the dict
-                        if "predict" in prompt:
-                            # Figure out which df was predicted on
-                            predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
-                            if predicted_df_name_match:
-                                predicted_df_name = predicted_df_name_match.group(1)
-                                if predicted_df_name in st.session_state.df_dict:
-                                    st.session_state.df_dict[predicted_df_name] = local_vars.get('df')
+                        df_result = local_vars.get('df')
+                        # Check if df_result is a DataFrame before calling .head()
+                        if isinstance(df_result, pd.DataFrame):
+                            response_data = df_result.head()
+                            # If a prediction was made, update the specific dataframe in the dict
+                            if "predict" in prompt:
+                                predicted_df_name_match = re.search(r"on the '(.*?)'", prompt)
+                                if predicted_df_name_match:
+                                    predicted_df_name = predicted_df_name_match.group(1)
+                                    if predicted_df_name in st.session_state.df_dict:
+                                        st.session_state.df_dict[predicted_df_name] = df_result
 
-                    # (Add back other command handlers if needed)
                     else:
                         response_content = "✅ Command executed."
 
