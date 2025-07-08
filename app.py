@@ -28,26 +28,27 @@ def generate_code(model, prompt, df_dict):
     """Uses the LLM to convert a prompt into executable code."""
     if model is None: return "ERROR: AI model is not configured."
     df_names = list(df_dict.keys())
-    primary_df_columns = list(df_dict.get(df_names[0], pd.DataFrame()).columns)
+    primary_df_name = df_names[0] if df_names else ''
+    primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
 
     system_prompt = f"""
     You are an expert Python data analyst. Your task is to convert a user's request into a single,
     executable line of Python code using pandas, plotly express, or a custom function.
 
     - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
-    - The primary DataFrame is `df = df_dict['{df_names[0]}']` if it exists.
+    - The primary DataFrame is `df = df_dict['{primary_df_name}']` if it exists.
     - The output MUST be a single line of code. Do NOT use markdown or comments.
     - Available columns in the primary DataFrame are: {primary_df_columns}.
 
     NEW CAPABILITIES:
     1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       `message = train_exit_model(df)`
+       message = train_exit_model()
     2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
-       `df, message = predict_with_saved_model(df)`
+       df, message = predict_with_saved_model(df)
 
     Examples:
     User prompt: train a model to predict exits
-    Generated code: message = train_exit_model(df)
+    Generated code: message = train_exit_model()
 
     User prompt: use the trained model to predict on the 'new_companies' data
     Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
@@ -79,12 +80,16 @@ def clean_monetary_columns(df):
             )
     return df
 
-def train_exit_model(df, target_col='Exit'):
-    """Trains a model and saves it to the session state."""
+def train_exit_model(target_col='Exit'):
+    """Trains a model using the primary dataframe from session state."""
+    primary_df_name = list(st.session_state.df_dict.keys())[0]
+    df = st.session_state.df_dict[primary_df_name]
+
     if target_col not in df.columns:
         return f"Error: Training data must have a '{target_col}' column."
     
     df_cleaned = clean_monetary_columns(df)
+    st.session_state.df_dict[primary_df_name] = df_cleaned # Update state with cleaned data
 
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df_cleaned.columns]
@@ -182,23 +187,21 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     try:
                         exec(code_to_run, globals(), local_vars)
                         
-                        # --- FINAL FIX IS HERE ---
-                        # After exec, check what happened and handle the dataframe state explicitly
-                        
                         if 'message' in local_vars:
                             response_content = local_vars['message']
-                            # If the command was training, the original df is unchanged but we should show the cleaned version
                             if "train" in prompt:
-                                df_display = clean_monetary_columns(df_copy)
-                                response_data = df_display.head()
-                            # If it was prediction, the df was modified and returned
+                                # After training, the cleaned df is in the session state
+                                response_data = st.session_state.df_dict[primary_df_name].head()
                             elif "predict" in prompt:
                                 df_result = local_vars.get('df')
                                 if isinstance(df_result, pd.DataFrame):
-                                    st.session_state.df_dict[primary_df_name] = df_result
+                                    # Find which df was predicted on and update it
+                                    predicted_df_name_match = re.search(r"df_dict\['(.*?)'\]", code_to_run)
+                                    if predicted_df_name_match:
+                                        predicted_df_name = predicted_df_name_match.group(1)
+                                        st.session_state.df_dict[predicted_df_name] = df_result
                                     response_data = df_result.head()
                         else:
-                            # Handle other pandas/plotly commands
                             df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
