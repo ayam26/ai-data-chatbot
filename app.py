@@ -63,22 +63,21 @@ def generate_code(model, prompt, df_dict):
 
 # --- Machine Learning Functions ---
 
-def clean_and_prepare_data(df):
-    """A robust function to clean data before ML or display."""
+def clean_monetary_columns(df):
+    """A robust function to clean known monetary columns."""
     df = df.copy()
-    for col in df.columns:
-        # Check if column is object type and not purely numeric
-        if df[col].dtype == 'object':
-            # Remove currency symbols and commas, then convert to numeric
-            # This handles values like '₹300,000,000', 'SGD10,000,000 ', etc.
-            cleaned_col = pd.to_numeric(
-                df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True),
+    # Explicitly define columns that are known to contain currency data
+    monetary_cols = [
+        'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
+        'Amount', 'Valuation'
+    ]
+    
+    for col in monetary_cols:
+        if col in df.columns and df[col].dtype == 'object':
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
                 errors='coerce'
             )
-            # Only replace the column if the conversion was successful for at least some values
-            # This prevents destroying purely text columns
-            if cleaned_col.notna().sum() > 0 and (df[col].str.contains(r'[\d,]', na=False).any()):
-                 df[col] = cleaned_col
     return df
 
 def train_exit_model(df, target_col='Exit'):
@@ -86,7 +85,7 @@ def train_exit_model(df, target_col='Exit'):
     if target_col not in df.columns:
         return None, f"Error: Training data must have a '{target_col}' column."
     
-    df_cleaned = clean_and_prepare_data(df)
+    df_cleaned = clean_monetary_columns(df)
 
     # --- AUTOMATIC FEATURE SELECTION ---
     feature_cols = [col for col in df_cleaned.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
@@ -119,7 +118,7 @@ def predict_with_saved_model(df):
     model = st.session_state.trained_model
     trained_features = st.session_state.trained_features
     
-    df_cleaned = clean_and_prepare_data(df)
+    df_cleaned = clean_monetary_columns(df)
     
     df_processed = pd.get_dummies(df_cleaned).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
