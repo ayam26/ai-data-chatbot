@@ -81,9 +81,9 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and saves it to the session state."""
+    """Trains a model and returns the original dataframe and a success message."""
     if target_col not in df.columns:
-        return f"Error: Training data must have a '{target_col}' column."
+        return df, f"Error: Training data must have a '{target_col}' column."
     
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
@@ -103,7 +103,9 @@ def train_exit_model(df, target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    
+    return df, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -142,8 +144,8 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
             df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.session_state.df_dict[file_key] = df_raw # Store raw data
-            st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
+            st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
+            st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
     
     st.header("Analysis Status")
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
@@ -153,8 +155,8 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
         if message.get("data") is not None:
-            # Clean before displaying from history
-            st.dataframe(clean_monetary_columns(message["data"]))
+            st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
+            st.dataframe(message["data"])
 
 if prompt := st.chat_input("Train a model or make a prediction?"):
     st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
@@ -166,8 +168,7 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
         else:
             with st.spinner("🧠 AI is thinking..."):
                 primary_df_name = list(st.session_state.df_dict.keys())[0]
-                # Always start with a fresh, clean copy for the operation
-                df_cleaned = clean_monetary_columns(st.session_state.df_dict[primary_df_name])
+                df_copy = st.session_state.df_dict[primary_df_name].copy()
 
                 code_to_run = generate_code(model, prompt, st.session_state.df_dict)
                 
@@ -176,20 +177,20 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
                     st.error(response_content)
                 else:
                     st.code(code_to_run, language="python")
-                    local_vars = {"df": df_cleaned, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                    local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                     response_content, response_data = "An unknown action occurred.", None
                     
                     try:
                         exec(code_to_run, globals(), local_vars)
                         
+                        df_result = local_vars.get('df')
+                        
                         if 'message' in local_vars:
                             response_content = local_vars['message']
-                            df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
                                 response_data = df_result.head()
                         else:
-                            df_result = local_vars.get('df')
                             if isinstance(df_result, pd.DataFrame):
                                 st.session_state.df_dict[primary_df_name] = df_result
                                 response_content = "✅ Command executed successfully."
@@ -199,8 +200,9 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
 
                         st.markdown(response_content)
                         if response_data is not None:
-                            # Final safety clean before display
-                            st.dataframe(clean_monetary_columns(response_data))
+                            # --- ADDED THIS NOTE ---
+                            st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
+                            st.dataframe(response_data)
 
                     except Exception as e:
                         response_content = f"❌ Error executing code: {e}"
