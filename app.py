@@ -36,7 +36,6 @@ def get_ai_response(model, prompt, df_dict):
     
     trained_on_file = st.session_state.get('trained_on_file', 'None')
 
-    # --- UPDATED: More specific examples for the AI ---
     system_prompt = f"""
     You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
@@ -131,10 +130,13 @@ def predict_with_saved_model(df):
     df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1]
     df['Exit Score (1-100)'] = (df['Exit_Probability'] * 100).round().astype(int)
     
-    df = df.sort_values(by='Exit Score (1-100)', ascending=False)
+    df_sorted = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
-    message = f"✅ Predictions made and scored. Displaying top potential exits."
-    return df, message
+    # --- NEW: Create a concise summary DataFrame ---
+    summary_df = df_sorted[['Organization Name', 'Exit Score (1-100)']]
+    
+    message = f"✅ Predictions made and scored. Here are the top potential exits:"
+    return summary_df, message
 
 # --- Streamlit App UI and Logic ---
 
@@ -174,7 +176,9 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
         if message.get("data") is not None:
-            st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
+            # Check if it's the summary table to avoid showing the preview note
+            if 'Exit Score (1-100)' not in message["data"].columns:
+                 st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
             st.dataframe(message["data"])
         if message.get("chart") is not None:
             st.plotly_chart(message["chart"], use_container_width=True)
@@ -245,14 +249,12 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                                 if 'message' in local_vars:
                                     response_content = local_vars['message']
                                     if isinstance(df_result, pd.DataFrame):
-                                        # Find which df was modified and update it
-                                        modified_df_name_match = re.search(r"df_dict\['(.*?)'\]", cleaned_response)
-                                        if modified_df_name_match:
-                                            modified_df_name = modified_df_name_match.group(1)
-                                            st.session_state.df_dict[modified_df_name] = df_result
+                                        # --- UPDATED: Handle both full and summary dataframes ---
+                                        if 'Exit Score (1-100)' in df_result.columns:
+                                            response_data = df_result # Show the full summary
                                         else:
-                                             st.session_state.df_dict[primary_df_name] = df_result
-                                        response_data = df_result.head()
+                                            st.session_state.df_dict[primary_df_name] = df_result
+                                            response_data = df_result.head()
                                 else:
                                     if isinstance(df_result, pd.DataFrame):
                                         st.session_state.df_dict[primary_df_name] = df_result
@@ -263,7 +265,8 @@ if prompt := st.chat_input("Ask a question or give a command..."):
 
                             st.markdown(response_content)
                             if response_data is not None:
-                                st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
+                                if 'Exit Score (1-100)' not in response_data.columns:
+                                    st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
                                 st.dataframe(response_data)
                             if response_chart is not None:
                                 st.plotly_chart(response_chart, use_container_width=True)
