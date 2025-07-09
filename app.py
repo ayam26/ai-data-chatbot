@@ -113,12 +113,20 @@ def train_and_score(df_train, df_predict):
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
+    # --- FINAL FIX IS HERE: Prepare data for scikit-learn ---
     # Convert pd.NA to np.nan for numeric columns
     for col in numeric_features:
         if col in df_train.columns:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
         if col in df_predict.columns:
             df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+
+    # Fill missing text values with empty strings
+    for col in text_features:
+        if col in df_train.columns:
+            df_train[col] = df_train[col].fillna('')
+        if col in df_predict.columns:
+            df_predict[col] = df_predict[col].fillna('')
 
     # Ensure all feature columns exist, fill missing with placeholders
     for col in numeric_features + categorical_features + text_features:
@@ -215,7 +223,6 @@ if prompt := st.chat_input("What would you like to do?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # --- ROBUST FIX: Initialize all response variables ---
         response_content, response_data = None, None
 
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
