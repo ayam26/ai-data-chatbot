@@ -4,6 +4,7 @@ import os
 import google.generativeai as genai
 import re
 import io
+import numpy as np # Import numpy
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -112,6 +113,14 @@ def train_and_score(df_train, df_predict):
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
+    # --- FINAL FIX IS HERE: Prepare data for scikit-learn ---
+    # Convert pd.NA to np.nan for numeric columns as scikit-learn handles np.nan better
+    for col in numeric_features:
+        if col in df_train.columns:
+            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+        if col in df_predict.columns:
+            df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+
     # Ensure all feature columns exist, fill missing with placeholders
     for col in numeric_features + categorical_features + text_features:
         if col not in df_train.columns: df_train[col] = 'Unknown' if col in categorical_features or col in text_features else 0
@@ -121,7 +130,7 @@ def train_and_score(df_train, df_predict):
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
     categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
     description_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(stop_words='english', max_features=150, ngram_range=(1,2)))])
-    investor_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(tokenizer=lambda x: [i.strip() for i in x.split(',')], max_features=100))])
+    investor_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(tokenizer=lambda x: [i.strip() for i in str(x).split(',')], max_features=100))])
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -195,7 +204,6 @@ if prompt := st.chat_input("What would you like to do?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # --- FINAL FIX IS HERE: Initialize variables at the top ---
         response_content, response_data = "An unknown action occurred.", None
 
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
