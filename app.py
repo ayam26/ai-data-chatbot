@@ -3,11 +3,15 @@ import pandas as pd
 import os
 import google.generativeai as genai
 import re
-import plotly.express as px
+import io
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
-import io
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
 
 # --- Core AI and Helper Functions ---
 
@@ -25,39 +29,17 @@ def get_ai_model():
         st.error(f"❌ Failed to configure AI model: {e}")
         return None
 
-def get_ai_response(model, prompt, df_dict):
+def get_ai_response(model, prompt):
     """
-    Uses the LLM to generate either a conversational response or executable code.
+    Uses the LLM to generate a conversational response or a command.
     """
     if model is None: return "ERROR: AI model is not configured."
-    df_names = list(df_dict.keys())
-    primary_df_name = df_names[0] if df_names else ''
-    primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
     
-    trained_on_file = st.session_state.get('trained_on_file', 'None')
-
-    # --- RE-ARCHITECTED: Simpler and more robust instructions for the AI ---
-    system_prompt = f"""
-    You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
-
-    Your current context:
-    - Available DataFrames are in a dictionary called `df_dict`. The keys are: {df_names}.
-    - The primary DataFrame for simple operations is `df = df_dict['{primary_df_name}']` if it exists.
-    - A model has been trained: {'Yes' if st.session_state.trained_model else 'No'}
-    - Model was trained on: '{trained_on_file}'
-
-    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data, you MUST respond ONLY with a single, executable line of Python code. This line should be the core operation, not an assignment.
-    2.  **Conversational Mode**: If the user asks a question or gives a greeting, respond with a friendly text message.
-
-    **Decision-Making:**
-    - If the prompt starts with "how", "what", "why", "explain", "tell me", "was the model trained on", or is a greeting, ALWAYS use Conversational Mode.
-    - Otherwise, assume it's a data task and generate code.
-
-    **Code Generation Rules (Data Analyst Mode Only):**
-    - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `train_exit_model(df)`
-    - To predict with a saved model on a specific dataframe, generate: `predict_with_saved_model(df_dict['dataframe_name'])`
-    - To filter data, generate: `df[df['Last Funding Type'].isin(['Series A', 'Series B'])]`
+    system_prompt = """
+    You are a helpful AI assistant. Your job is to determine the user's intent.
+    - If the user asks to "train", "build a model", or "run the predictor", respond with the single word: TRAIN
+    - If the user asks to "predict", "score new companies", or "use the model", respond with the single word: PREDICT
+    - For any other question or greeting, provide a friendly, conversational response.
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -65,204 +47,174 @@ def get_ai_response(model, prompt, df_dict):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
-# --- Machine Learning Functions ---
+# --- Advanced Data Processing and Modeling (from predictor.py) ---
 
-def clean_monetary_columns(df):
-    """A robust function to clean known monetary columns."""
+def clean_and_feature_engineer(df):
+    """
+    Performs all advanced cleaning and feature engineering from predictor.py.
+    """
     df = df.copy()
-    monetary_cols = [
-        'Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount',
-        'Amount', 'Valuation'
-    ]
+    df.columns = [col.strip() for col in df.columns]
+
+    # 1. Clean Headquarters Location -> Only Country
+    def get_country(location):
+        return str(location).split(',')[-1].strip() if isinstance(location, str) else 'Unknown'
+    df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
+
+    # 2. Create Top Industry
+    industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
+    industry_map = {'Artificial Intelligence (AI)': 'AI', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
+    def get_top_industry(row):
+        text = f"{row.get('Industry Groups', '')} {row.get('Industries', '')}"
+        for industry in industry_priority:
+            if re.search(r'\b' + re.escape(industry) + r'\b', text, re.IGNORECASE): return industry
+        for term, top_industry in industry_map.items():
+            if term in text: return top_industry
+        return 'Other'
+    df['Top Industry'] = df.apply(get_top_industry, axis=1)
+
+    # 3. Clean Date Columns -> Year only
+    def get_year(date):
+        match = re.search(r'\b\d{4}\b', str(date))
+        return pd.to_numeric(match.group(0), errors='coerce') if match else pd.NA
+    df['Founded Year'] = df['Founded Date'].apply(get_year)
+    df['Exit Year'] = df['Exit Date'].apply(get_year)
+
+    # 4. Convert all monetary data to USD
+    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
+    def convert_to_usd(value):
+        if not isinstance(value, str): return pd.NA
+        value_cleaned = value.replace(',', '')
+        for symbol, rate in exchange_rates.items():
+            if symbol in value_cleaned:
+                numeric_part = re.search(r'[\d\.]+', value_cleaned)
+                if numeric_part: return float(numeric_part.group(0)) * rate
+        numeric_part = re.search(r'[\d\.]+', value_cleaned)
+        return float(numeric_part.group(0)) if numeric_part else pd.NA
+        
+    money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
+    for col in money_cols:
+        df[f"{col} (USD)"] = df[col].apply(convert_to_usd)
+
+    # 5. Create the final 'Exit' column if it doesn't exist
+    if 'Exit' not in df.columns:
+        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or str(row.get('Funding Status')) in ['M&A', 'IPO'] else 0.0, axis=1)
     
-    for col in monetary_cols:
-        if col in df.columns and df[col].dtype == 'object':
-            df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(r'[^\d.]', '', regex=True),
-                errors='coerce'
-            ).fillna(0)
     return df
 
-def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns a success message."""
-    if target_col not in df.columns:
-        return f"Error: Training data must have a '{target_col}' column."
-    
-    primary_df_name = [name for name, data in st.session_state.df_dict.items() if data.equals(df)][0]
+def train_and_score(df_train, df_predict):
+    """
+    Trains the advanced model on df_train and scores df_predict.
+    """
+    # Define features for the advanced model
+    target = 'Exit'
+    numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
+    categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
+    text_features = ['Description', 'Top 5 Investors']
 
-    feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
-    feature_cols = [col for col in feature_cols if col in df.columns]
-    
-    df_for_ml = pd.get_dummies(df[feature_cols], dummy_na=True).fillna(0)
-    st.session_state.trained_features = df_for_ml.columns.tolist()
+    # Ensure all feature columns exist, fill missing with placeholders
+    for col in numeric_features + categorical_features + text_features:
+        if col not in df_train.columns: df_train[col] = 'Unknown' if col in categorical_features or col in text_features else 0
+        if col not in df_predict.columns: df_predict[col] = 'Unknown' if col in categorical_features or col in text_features else 0
 
-    X = df_for_ml
-    y = df[target_col].fillna(0)
-    
-    y, X = y.align(X, join='inner', axis=0)
+    # Preprocessing pipelines
+    numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
+    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+    description_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(stop_words='english', max_features=150, ngram_range=(1,2)))])
+    investor_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(tokenizer=lambda x: [i.strip() for i in x.split(',')], max_features=100))])
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features),
+            ('desc', description_transformer, 'Description'),
+            ('inv', investor_transformer, 'Top 5 Investors')],
+        remainder='drop')
+
+    model = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))
+    ])
+
+    # Train the model
+    X_train = df_train.drop(columns=[target, 'Organization Name'], errors='ignore')
+    y_train = df_train[target]
     model.fit(X_train, y_train)
-    st.session_state.trained_model = model
-    st.session_state.trained_on_file = primary_df_name
+    accuracy = model.named_steps['classifier'].oob_score_
 
-    accuracy = accuracy_score(y_test, model.predict(X_test))
-    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-
-def predict_with_saved_model(df):
-    """Uses the saved model to make predictions, create a score, and sort."""
-    if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
-        return df, "Error: You must train a model first before making predictions."
+    # Predict on the new data
+    X_predict = df_predict.drop(columns=[target, 'Organization Name'], errors='ignore')
+    probabilities = model.predict_proba(X_predict)[:, 1]
     
-    model = st.session_state.trained_model
-    trained_features = st.session_state.trained_features
+    # Create results dataframe
+    results_df = pd.DataFrame({
+        'Organization Name': df_predict['Organization Name'],
+        'Success Score': (probabilities * 100).round().astype(int)
+    }).sort_values(by='Success Score', ascending=False)
     
-    df_processed = pd.get_dummies(df).fillna(0)
-    df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
-    
-    df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1]
-    df['Exit Score (1-100)'] = (df['Exit_Probability'] * 100).round().astype(int)
-    
-    df_sorted = df.sort_values(by='Exit Score (1-100)', ascending=False)
-    
-    summary_df = df_sorted[['Organization Name', 'Exit Score (1-100)']].head(20)
-    
-    message = f"✅ Predictions made and scored. Here are the top 20 potential exits:"
-    return summary_df, message
+    message = f"✅ Advanced model trained with an estimated accuracy of {accuracy:.2%}. Here are the scores for the prediction data:"
+    return results_df, message
 
 # --- Streamlit App UI and Logic ---
 
 st.set_page_config(layout="wide")
-st.title("📊 AI Data Analyst")
-st.caption("Your conversational partner for analysis, prediction, and visualization.")
+st.title("🚀 Advanced AI Exit Predictor")
+st.caption("Powered by a custom data pipeline and machine learning model.")
 
 model = get_ai_model()
 
 # Initialize session state
-if "df_dict" not in st.session_state: st.session_state.df_dict = {}
+if "training_data" not in st.session_state: st.session_state.training_data = None
+if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
 if "messages" not in st.session_state: st.session_state.messages = []
-if "trained_model" not in st.session_state: st.session_state.trained_model = None
-if "trained_features" not in st.session_state: st.session_state.trained_features = None
-if "trained_on_file" not in st.session_state: st.session_state.trained_on_file = None
 
 with st.sidebar:
-    st.header("Upload Your Data")
-    uploaded_files = st.file_uploader("Upload training and prediction files", type=["xlsx", "csv"], accept_multiple_files=True)
-    
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
-            if file_key not in st.session_state.df_dict:
-                df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-                st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
-                st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
-    
-    st.header("Analysis Status")
-    st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
-    model_status = "Yes" if st.session_state.trained_model else "No"
-    trained_file_info = f" (on `{st.session_state.trained_on_file}`)" if st.session_state.trained_on_file else ""
-    st.write(f"**Model Trained:** {model_status}{trained_file_info}")
+    st.header("1. Upload Training Data")
+    train_file = st.file_uploader("Upload your historical data with exit info", type=["xlsx", "csv"])
+    if train_file:
+        df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
+        st.session_state.training_data = clean_and_feature_engineer(df_raw)
+        st.success(f"Loaded and prepared '{train_file.name}'.")
 
+    st.header("2. Upload Prediction Data")
+    predict_file = st.file_uploader("Upload the data you want to score", type=["xlsx", "csv"])
+    if predict_file:
+        df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
+        st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
+        st.success(f"Loaded and prepared '{predict_file.name}'.")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
         if message.get("data") is not None:
-            if 'Exit Score (1-100)' not in message["data"].columns:
-                 st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
             st.dataframe(message["data"])
-        if message.get("chart") is not None:
-            st.plotly_chart(message["chart"], use_container_width=True)
 
-
-if prompt := st.chat_input("Ask a question or give a command..."):
-    st.session_state.messages.append({"role": "user", "content": prompt, "data": None, "chart": None})
+if prompt := st.chat_input("What would you like to do?"):
+    st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        if not st.session_state.df_dict:
-            st.warning("Please upload at least one data file first.")
+        if st.session_state.training_data is None or st.session_state.prediction_data is None:
+            st.warning("Please upload both a training and a prediction file first.")
         else:
-            with st.spinner("🧠 Thinking..."):
-                primary_df_name = list(st.session_state.df_dict.keys())[0] if st.session_state.df_dict else None
-                df_copy = st.session_state.df_dict[primary_df_name].copy() if primary_df_name else None
+            with st.spinner("🧠 AI is thinking..."):
+                ai_response = get_ai_response(model, prompt)
                 
-                parts = prompt.split()
-                command = parts[0].lower() if parts else ""
+                response_content, response_data = "An unknown action occurred.", None
 
-                if command == "save":
-                    if df_copy is None:
-                        st.warning("Please upload a file first.")
-                    else:
-                        try:
-                            output_path = parts[1]
-                            output_buffer = io.BytesIO()
-                            with pd.ExcelWriter(output_buffer, engine='xlsxwriter') as writer:
-                                df_copy.to_excel(writer, index=False, sheet_name='Sheet1')
-                            
-                            st.download_button(
-                                label=f"📥 Download {output_path}",
-                                data=output_buffer.getvalue(),
-                                file_name=output_path,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                            response_content = f"Your file is ready. Click the button above to download."
-                            st.markdown(response_content)
-                        except Exception as e:
-                            response_content = f"❌ Error creating download link: {e}"
-                            st.error(response_content)
-                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None, "chart": None})
-                else:
-                    ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
-                    
-                    cleaned_response = ai_response.strip().strip('`')
-
-                    code_keywords = ['df[', 'fig =', 'train_exit_model', 'predict_with_saved_model']
-                    is_code = any(keyword in cleaned_response for keyword in code_keywords)
-
-                    if cleaned_response.startswith("ERROR:"):
-                        response_content = f"❌ {cleaned_response}"
-                        st.error(response_content)
-                    elif is_code:
-                        st.code(cleaned_response, language="python")
-                        local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
-                        response_content, response_data, response_chart = "An unknown action occurred.", None, None
-                        
-                        try:
-                            # --- RE-ARCHITECTED: Use eval to capture the result directly ---
-                            result = eval(cleaned_response, globals(), local_vars)
-                            
-                            if isinstance(result, tuple) and len(result) == 2: # Prediction
-                                df_result, message = result
-                                response_content = message
-                                response_data = df_result
-                            elif isinstance(result, str): # Training
-                                response_content = result
-                                response_data = st.session_state.df_dict[primary_df_name].head()
-                            elif isinstance(result, pd.DataFrame): # Pandas operation
-                                st.session_state.df_dict[primary_df_name] = result
-                                response_content = "✅ Command executed successfully."
-                                response_data = result.head()
-                            else: # Plotly fig
-                                response_chart = result
-                                response_content = f"✅ Here is your interactive chart for '{prompt}'"
-                            
-                            st.markdown(response_content)
-                            if response_data is not None:
-                                if 'Exit Score (1-100)' not in response_data.columns:
-                                    st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
-                                st.dataframe(response_data)
-                            if response_chart is not None:
-                                st.plotly_chart(response_chart, use_container_width=True)
-
-                        except Exception as e:
-                            response_content = f"❌ Error executing code: {e}"
-                            st.error(response_content)
-                    else: # It's a conversational response
-                        response_content = cleaned_response
+                if ai_response == "TRAIN" or ai_response == "PREDICT":
+                    try:
+                        results_df, message = train_and_score(st.session_state.training_data, st.session_state.prediction_data)
+                        response_content = message
+                        response_data = results_df
                         st.markdown(response_content)
-                
-                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart if 'response_chart' in locals() else None})
+                        st.dataframe(response_data)
+                    except Exception as e:
+                        response_content = f"❌ Error during model training/prediction: {e}"
+                        st.error(response_content)
+                else: # It's a conversational response
+                    response_content = ai_response
+                    st.markdown(response_content)
+            
+            st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
