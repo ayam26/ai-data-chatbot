@@ -33,30 +33,29 @@ def get_ai_response(model, prompt, df_dict):
     df_names = list(df_dict.keys())
     primary_df_name = df_names[0] if df_names else ''
     primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
+    
+    trained_on_file = st.session_state.get('trained_on_file', 'None')
 
     system_prompt = f"""
     You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
+    Your current context:
+    - Available DataFrames: {df_names}
+    - Primary DataFrame for operations: '{primary_df_name}'
+    - A model has been trained: {'Yes' if st.session_state.trained_model else 'No'}
+    - Model was trained on: '{trained_on_file}'
+
     1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data (e.g., 'filter...', 'sort...', 'plot...', 'train...'), you MUST respond ONLY with a single, executable line of Python code.
-    2.  **Conversational Mode**: If the user asks a question (especially starting with 'how', 'what', 'why', 'explain') or gives a greeting, respond with a friendly, helpful text message. Do NOT generate code for these.
+    2.  **Conversational Mode**: If the user asks a question about the process or the model's status (e.g., 'how do you work?', 'which file was used for training?'), or gives a greeting, respond with a friendly, helpful text message using the context above. Do NOT generate code.
 
     **Decision-Making:**
-    - If the prompt starts with "how", "what", "why", "explain", "tell me", or is a greeting, ALWAYS use Conversational Mode.
+    - If the prompt starts with "how", "what", "why", "explain", "tell me", "was the model trained on", or is a greeting, ALWAYS use Conversational Mode.
     - Otherwise, if the prompt contains data-related keywords like 'filter', 'sort', 'plot', 'train', 'predict', 'rename', assume it's a data task and generate code.
 
     **Code Generation Rules (Data Analyst Mode Only):**
-    - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
-    - The primary DataFrame is `df = df_dict['{primary_df_name}']` if it exists.
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `df, message = train_exit_model(df)`
+    - To train a model, generate: `message = train_exit_model(df)`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
-
-    **PANDAS EXAMPLES:**
-    User: "filter to only show rows where Last Funding Type is Series A, Series B, or Seed"
-    Generated code: `df = df[df['Last Funding Type'].isin(['Series A', 'Series B', 'Seed'])]`
-
-    User: "sort by Total Funding Amount descending"
-    Generated code: `df = df.sort_values(by='Total Funding Amount', ascending=False)`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -83,10 +82,12 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns the cleaned dataframe and a success message."""
+    """Trains a model and returns a success message."""
     if target_col not in df.columns:
-        return df, f"Error: Training data must have a '{target_col}' column."
+        return f"Error: Training data must have a '{target_col}' column."
     
+    primary_df_name = [name for name, data in st.session_state.df_dict.items() if data.equals(df)][0]
+
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
     
@@ -103,11 +104,10 @@ def train_exit_model(df, target_col='Exit'):
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
     st.session_state.trained_model = model
+    st.session_state.trained_on_file = primary_df_name
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    
-    return df, message
+    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions, create a score, and sort."""
@@ -125,7 +125,7 @@ def predict_with_saved_model(df):
     
     df = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
-    message = f"✅ Predictions made and scored. Displaying top potential exits."
+    message = f"✅ Predictions made using the saved model. Displaying top potential exits."
     return df, message
 
 # --- Streamlit App UI and Logic ---
@@ -141,21 +141,27 @@ if "df_dict" not in st.session_state: st.session_state.df_dict = {}
 if "messages" not in st.session_state: st.session_state.messages = []
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 if "trained_features" not in st.session_state: st.session_state.trained_features = None
+if "trained_on_file" not in st.session_state: st.session_state.trained_on_file = None
 
 with st.sidebar:
     st.header("Upload Your Data")
     uploaded_files = st.file_uploader("Upload training and prediction files", type=["xlsx", "csv"], accept_multiple_files=True)
+    
+    # --- FINAL FIX IS HERE: Don't reset the whole dict on new uploads ---
     if uploaded_files:
-        st.session_state.df_dict = {}
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
-            df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.session_state.df_dict[file_key] = df_raw # Store raw data
-            st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
+            if file_key not in st.session_state.df_dict: # Only load new files
+                df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+                st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
+                st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
     
     st.header("Analysis Status")
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
-    st.write(f"**Model Trained:** {'Yes' if st.session_state.trained_model else 'No'}")
+    model_status = "Yes" if st.session_state.trained_model else "No"
+    trained_file_info = f" (on `{st.session_state.trained_on_file}`)" if st.session_state.trained_on_file else ""
+    st.write(f"**Model Trained:** {model_status}{trained_file_info}")
+
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -215,9 +221,7 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         st.error(response_content)
                     elif is_code:
                         st.code(cleaned_response, language="python")
-                        # --- ROBUST FIX: Always clean the data before using it ---
-                        cleaned_df_for_exec = clean_monetary_columns(df_copy)
-                        local_vars = {"df": cleaned_df_for_exec, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                        local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                         response_content, response_data = "An unknown action occurred.", None
                         
                         try:
