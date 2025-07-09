@@ -36,6 +36,7 @@ def get_ai_response(model, prompt, df_dict):
     
     trained_on_file = st.session_state.get('trained_on_file', 'None')
 
+    # --- RE-ARCHITECTED: Simpler and more robust instructions for the AI ---
     system_prompt = f"""
     You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
@@ -45,7 +46,7 @@ def get_ai_response(model, prompt, df_dict):
     - A model has been trained: {'Yes' if st.session_state.trained_model else 'No'}
     - Model was trained on: '{trained_on_file}'
 
-    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data, you MUST respond ONLY with a single, executable line of Python code.
+    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data, you MUST respond ONLY with a single, executable line of Python code. This line should be the core operation, not an assignment.
     2.  **Conversational Mode**: If the user asks a question or gives a greeting, respond with a friendly text message.
 
     **Decision-Making:**
@@ -54,15 +55,9 @@ def get_ai_response(model, prompt, df_dict):
 
     **Code Generation Rules (Data Analyst Mode Only):**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `message = train_exit_model(df)`
-    - To predict with a saved model on a specific dataframe, generate: `df_dict['dataframe_name'], message = predict_with_saved_model(df_dict['dataframe_name'])`
-
-    **Examples:**
-    User: "train a model to predict exits"
-    AI Response (Code): `message = train_exit_model(df)`
-
-    User: "use the trained model to predict on the 'new_deals' data"
-    AI Response (Code): `df_dict['new_deals'], message = predict_with_saved_model(df_dict['new_deals'])`
+    - To train a model, generate: `train_exit_model(df)`
+    - To predict with a saved model on a specific dataframe, generate: `predict_with_saved_model(df_dict['dataframe_name'])`
+    - To filter data, generate: `df[df['Last Funding Type'].isin(['Series A', 'Series B'])]`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -132,7 +127,6 @@ def predict_with_saved_model(df):
     
     df_sorted = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
-    # --- UPDATED: Create a concise summary DataFrame ---
     summary_df = df_sorted[['Organization Name', 'Exit Score (1-100)']].head(20)
     
     message = f"✅ Predictions made and scored. Here are the top 20 potential exits:"
@@ -176,7 +170,6 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
         if message.get("data") is not None:
-            # Check if it's the summary table to avoid showing the preview note
             if 'Exit Score (1-100)' not in message["data"].columns:
                  st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
             st.dataframe(message["data"])
@@ -227,7 +220,7 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                     
                     cleaned_response = ai_response.strip().strip('`')
 
-                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
+                    code_keywords = ['df[', 'fig =', 'train_exit_model', 'predict_with_saved_model']
                     is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
                     if cleaned_response.startswith("ERROR:"):
@@ -239,30 +232,24 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         response_content, response_data, response_chart = "An unknown action occurred.", None, None
                         
                         try:
-                            exec(cleaned_response, globals(), local_vars)
+                            # --- RE-ARCHITECTED: Use eval to capture the result directly ---
+                            result = eval(cleaned_response, globals(), local_vars)
                             
-                            if local_vars.get("fig") is not None:
-                                response_chart = local_vars["fig"]
+                            if isinstance(result, tuple) and len(result) == 2: # Prediction
+                                df_result, message = result
+                                response_content = message
+                                response_data = df_result
+                            elif isinstance(result, str): # Training
+                                response_content = result
+                                response_data = st.session_state.df_dict[primary_df_name].head()
+                            elif isinstance(result, pd.DataFrame): # Pandas operation
+                                st.session_state.df_dict[primary_df_name] = result
+                                response_content = "✅ Command executed successfully."
+                                response_data = result.head()
+                            else: # Plotly fig
+                                response_chart = result
                                 response_content = f"✅ Here is your interactive chart for '{prompt}'"
-                            else:
-                                df_result = local_vars.get('df')
-                                if 'message' in local_vars:
-                                    response_content = local_vars['message']
-                                    if isinstance(df_result, pd.DataFrame):
-                                        # --- UPDATED: Handle both full and summary dataframes ---
-                                        if 'Exit Score (1-100)' in df_result.columns:
-                                            response_data = df_result # Show the full summary
-                                        else:
-                                            st.session_state.df_dict[primary_df_name] = df_result
-                                            response_data = df_result.head()
-                                else:
-                                    if isinstance(df_result, pd.DataFrame):
-                                        st.session_state.df_dict[primary_df_name] = df_result
-                                        response_content = "✅ Command executed successfully."
-                                        response_data = df_result.head()
-                                    else:
-                                        response_content = f"✅ Command executed. Result: {df_result}"
-
+                            
                             st.markdown(response_content)
                             if response_data is not None:
                                 if 'Exit Score (1-100)' not in response_data.columns:
