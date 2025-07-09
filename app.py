@@ -160,7 +160,7 @@ def train_and_score(df_train, df_predict):
         'Success Score': (probabilities * 100).round().astype(int)
     }).sort_values(by='Success Score', ascending=False)
     
-    st.session_state.trained_model = model # Save the trained model
+    st.session_state.trained_model = model
     st.session_state.trained_on_file = st.session_state.get('training_file_name', 'Unknown')
 
     message = f"✅ Advanced model trained with an estimated accuracy of {accuracy:.2%}. Here are the scores for the prediction data:"
