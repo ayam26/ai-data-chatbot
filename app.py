@@ -54,7 +54,7 @@ def get_ai_response(model, prompt, df_dict):
 
     **Code Generation Rules (Data Analyst Mode Only):**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `message = train_exit_model()`
+    - To train a model, generate: `model, features, message = train_exit_model(df)`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
     """
     try:
@@ -81,20 +81,16 @@ def clean_monetary_columns(df):
             ).fillna(0)
     return df
 
-def train_exit_model(target_col='Exit'):
-    """Trains a model using the primary dataframe from session state."""
-    primary_df_name = list(st.session_state.df_dict.keys())[0]
-    df = st.session_state.df_dict[primary_df_name]
-
+def train_exit_model(df, target_col='Exit'):
+    """Trains a model and returns the model, features, and a success message."""
     if target_col not in df.columns:
-        return f"Error: Training data must have a '{target_col}' column."
+        return None, None, f"Error: Training data must have a '{target_col}' column."
     
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
     
     df_for_ml = pd.get_dummies(df[feature_cols], dummy_na=True).fillna(0)
-    st.session_state.trained_features = df_for_ml.columns.tolist()
-
+    
     X = df_for_ml
     y = df[target_col].fillna(0)
     
@@ -104,11 +100,11 @@ def train_exit_model(target_col='Exit'):
     
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
-    st.session_state.trained_model = model
-    st.session_state.trained_on_file = primary_df_name
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    
+    return model, df_for_ml.columns.tolist(), message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions, create a score, and sort."""
@@ -213,7 +209,7 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                     
                     cleaned_response = ai_response.strip().strip('`')
 
-                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
+                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =', 'model, features, message =']
                     is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
                     if cleaned_response.startswith("ERROR:"):
@@ -221,21 +217,27 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         st.error(response_content)
                     elif is_code:
                         st.code(cleaned_response, language="python")
-                        # --- ROBUST FIX: Pass the correct dataframe to exec ---
                         local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                         response_content, response_data = "An unknown action occurred.", None
                         
                         try:
                             exec(cleaned_response, globals(), local_vars)
                             
-                            df_result = local_vars.get('df')
-                            
-                            if 'message' in local_vars:
+                            # --- FINAL FIX IS HERE: Explicitly update session state from local_vars ---
+                            if 'model' in local_vars:
+                                st.session_state.trained_model = local_vars['model']
+                                st.session_state.trained_features = local_vars['features']
+                                st.session_state.trained_on_file = primary_df_name
                                 response_content = local_vars['message']
+                                response_data = df_copy.head() # Show the head of the data that was just trained on
+                            elif 'message' in local_vars:
+                                response_content = local_vars['message']
+                                df_result = local_vars.get('df')
                                 if isinstance(df_result, pd.DataFrame):
                                     st.session_state.df_dict[primary_df_name] = df_result
                                     response_data = df_result.head()
                             else:
+                                df_result = local_vars.get('df')
                                 if isinstance(df_result, pd.DataFrame):
                                     st.session_state.df_dict[primary_df_name] = df_result
                                     response_content = "✅ Command executed successfully."
