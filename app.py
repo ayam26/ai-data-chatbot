@@ -36,31 +36,34 @@ def get_ai_response(model, prompt, df_dict):
     
     trained_on_file = st.session_state.get('trained_on_file', 'None')
 
-    # --- UPDATED: System prompt now includes visualization instructions ---
+    # --- UPDATED: More specific examples for the AI ---
     system_prompt = f"""
-    You are a helpful AI assistant with three modes: Data Analyst, Visualizer, and Conversationalist.
+    You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
     Your current context:
-    - Available DataFrames: {df_names}
-    - Primary DataFrame for operations: '{primary_df_name}'
+    - Available DataFrames are in a dictionary called `df_dict`. The keys are: {df_names}.
+    - The primary DataFrame for simple operations is `df = df_dict['{primary_df_name}']` if it exists.
     - A model has been trained: {'Yes' if st.session_state.trained_model else 'No'}
     - Model was trained on: '{trained_on_file}'
 
-    1.  **Visualizer Mode**: If the user asks to "plot", "chart", "visualize", or "graph", generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
-    2.  **Data Analyst Mode**: For other data manipulation commands (e.g., 'filter', 'sort', 'train'), generate a single line of Python pandas code.
-    3.  **Conversational Mode**: For questions or greetings, respond with a friendly text message.
+    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data, you MUST respond ONLY with a single, executable line of Python code.
+    2.  **Conversational Mode**: If the user asks a question or gives a greeting, respond with a friendly text message.
 
     **Decision-Making:**
-    - If the prompt contains "plot", "chart", "visualize", or "graph", use Visualizer Mode.
-    - If it contains other data keywords like 'filter', 'sort', 'train', 'predict', use Data Analyst Mode.
-    - Otherwise, use Conversational Mode.
+    - If the prompt starts with "how", "what", "why", "explain", "tell me", "was the model trained on", or is a greeting, ALWAYS use Conversational Mode.
+    - Otherwise, assume it's a data task and generate code.
 
-    **Code Generation Rules:**
+    **Code Generation Rules (Data Analyst Mode Only):**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
     - To train a model, generate: `message = train_exit_model(df)`
-    - To predict, generate: `df, message = predict_with_saved_model(df)`
-    - To create a bar chart, generate: `fig = px.bar(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
-    - To create a scatter plot, generate: `fig = px.scatter(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
+    - To predict with a saved model on a specific dataframe, generate: `df_dict['dataframe_name'], message = predict_with_saved_model(df_dict['dataframe_name'])`
+
+    **Examples:**
+    User: "train a model to predict exits"
+    AI Response (Code): `message = train_exit_model(df)`
+
+    User: "use the trained model to predict on the 'new_deals' data"
+    AI Response (Code): `df_dict['new_deals'], message = predict_with_saved_model(df_dict['new_deals'])`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -242,7 +245,13 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                                 if 'message' in local_vars:
                                     response_content = local_vars['message']
                                     if isinstance(df_result, pd.DataFrame):
-                                        st.session_state.df_dict[primary_df_name] = df_result
+                                        # Find which df was modified and update it
+                                        modified_df_name_match = re.search(r"df_dict\['(.*?)'\]", cleaned_response)
+                                        if modified_df_name_match:
+                                            modified_df_name = modified_df_name_match.group(1)
+                                            st.session_state.df_dict[modified_df_name] = df_result
+                                        else:
+                                             st.session_state.df_dict[primary_df_name] = df_result
                                         response_data = df_result.head()
                                 else:
                                     if isinstance(df_result, pd.DataFrame):
