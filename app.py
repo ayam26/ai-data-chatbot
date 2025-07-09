@@ -15,11 +15,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 
-# --- Suppress specific, harmless warnings from scikit-learn ---
-warnings.filterwarnings("ignore", message="Skipping features without any observed values")
-warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None")
-
-
 # --- Core AI and Helper Functions ---
 
 @st.cache_resource
@@ -157,15 +152,20 @@ def train_and_score(df_train, df_predict):
         ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))
     ])
 
-    # Train the model
-    X_train = df_train.drop(columns=[target, 'Organization Name'], errors='ignore')
-    y_train = df_train[target]
-    model.fit(X_train, y_train)
-    accuracy = model.named_steps['classifier'].oob_score_
+    # --- FINAL FIX IS HERE: Suppress warnings during training and prediction ---
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Skipping features without any observed values")
+        warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None")
+        
+        # Train the model
+        X_train = df_train.drop(columns=[target, 'Organization Name'], errors='ignore')
+        y_train = df_train[target]
+        model.fit(X_train, y_train)
+        accuracy = model.named_steps['classifier'].oob_score_
 
-    # Predict on the new data
-    X_predict = df_predict.drop(columns=[target, 'Organization Name'], errors='ignore')
-    probabilities = model.predict_proba(X_predict)[:, 1]
+        # Predict on the new data
+        X_predict = df_predict.drop(columns=[target, 'Organization Name'], errors='ignore')
+        probabilities = model.predict_proba(X_predict)[:, 1]
     
     # Create results dataframe
     results_df = pd.DataFrame({
