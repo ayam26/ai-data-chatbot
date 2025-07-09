@@ -7,6 +7,7 @@ import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+import io
 
 # --- Core AI and Helper Functions ---
 
@@ -181,7 +182,6 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                 primary_df_name = list(st.session_state.df_dict.keys())[0] if st.session_state.df_dict else None
                 df_copy = st.session_state.df_dict[primary_df_name].copy() if primary_df_name else None
                 
-                # --- NEW: Handle built-in 'save' command ---
                 parts = prompt.split()
                 command = parts[0].lower() if parts else ""
 
@@ -191,11 +191,20 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                     else:
                         try:
                             output_path = parts[1]
-                            df_copy.to_excel(output_path, index=False)
-                            response_content = f"✅ Successfully saved the current data to `{output_path}`"
-                            st.success(response_content)
+                            output_buffer = io.BytesIO()
+                            with pd.ExcelWriter(output_buffer, engine='xlsxwriter') as writer:
+                                df_copy.to_excel(writer, index=False, sheet_name='Sheet1')
+                            
+                            st.download_button(
+                                label=f"📥 Download {output_path}",
+                                data=output_buffer.getvalue(),
+                                file_name=output_path,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                            response_content = f"Your file is ready. Click the button above to download."
+                            st.markdown(response_content) # Use markdown to render the button
                         except Exception as e:
-                            response_content = f"❌ Error saving file: {e}"
+                            response_content = f"❌ Error creating download link: {e}"
                             st.error(response_content)
                     st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None})
                 else:
