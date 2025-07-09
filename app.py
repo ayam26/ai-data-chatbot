@@ -50,6 +50,13 @@ def get_ai_response(model, prompt, df_dict):
     - To train a model, generate: `message = train_exit_model(df)`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
 
+    **PANDAS EXAMPLES:**
+    User: "filter to only show rows where Last Funding Type is Series A, Series B, or Seed"
+    Generated code: `df = df[df['Last Funding Type'].isin(['Series A', 'Series B', 'Seed'])]`
+
+    User: "sort by Total Funding Amount descending"
+    Generated code: `df = df.sort_values(by='Total Funding Amount', ascending=False)`
+
     **Example Interaction:**
     User: "how do you train the model?"
     AI Response (Conversational): "I use a RandomForestClassifier model from the scikit-learn library. I take all the relevant columns as features, split the data into training and testing sets, and then train the model to recognize patterns that lead to an exit. The accuracy is then calculated on the test set."
@@ -117,11 +124,9 @@ def predict_with_saved_model(df):
     df_processed = pd.get_dummies(df).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
     
-    # --- NEW: Scoring and Sorting Logic ---
     df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1]
     df['Exit Score (1-100)'] = (df['Exit_Probability'] * 100).round().astype(int)
     
-    # Sort by the new score in descending order
     df = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
     message = f"✅ Predictions made and scored. Displaying top potential exits."
