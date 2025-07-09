@@ -4,7 +4,7 @@ import os
 import google.generativeai as genai
 import re
 import io
-import numpy as np # Import numpy
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -113,8 +113,7 @@ def train_and_score(df_train, df_predict):
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
-    # --- FINAL FIX IS HERE: Prepare data for scikit-learn ---
-    # Convert pd.NA to np.nan for numeric columns as scikit-learn handles np.nan better
+    # Convert pd.NA to np.nan for numeric columns
     for col in numeric_features:
         if col in df_train.columns:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
@@ -161,6 +160,9 @@ def train_and_score(df_train, df_predict):
         'Success Score': (probabilities * 100).round().astype(int)
     }).sort_values(by='Success Score', ascending=False)
     
+    st.session_state.trained_model = model # Save the trained model
+    st.session_state.trained_on_file = st.session_state.get('training_file_name', 'Unknown')
+
     message = f"✅ Advanced model trained with an estimated accuracy of {accuracy:.2%}. Here are the scores for the prediction data:"
     return results_df, message
 
@@ -176,6 +178,8 @@ model = get_ai_model()
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
 if "messages" not in st.session_state: st.session_state.messages = []
+if "trained_model" not in st.session_state: st.session_state.trained_model = None
+if "trained_on_file" not in st.session_state: st.session_state.trained_on_file = None
 
 with st.sidebar:
     st.header("1. Upload Training Data")
@@ -183,6 +187,7 @@ with st.sidebar:
     if train_file:
         df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
         st.session_state.training_data = clean_and_feature_engineer(df_raw)
+        st.session_state.training_file_name = train_file.name
         st.success(f"Loaded and prepared '{train_file.name}'.")
 
     st.header("2. Upload Prediction Data")
@@ -191,6 +196,13 @@ with st.sidebar:
         df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
         st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
         st.success(f"Loaded and prepared '{predict_file.name}'.")
+
+    # --- RESTORED: "Model Trained" status display ---
+    st.header("Analysis Status")
+    model_status = "Yes" if st.session_state.trained_model else "No"
+    trained_file_info = f" (on `{st.session_state.trained_on_file}`)" if st.session_state.trained_on_file else ""
+    st.write(f"**Model Trained:** {model_status}{trained_file_info}")
+
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -204,6 +216,7 @@ if prompt := st.chat_input("What would you like to do?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+        # --- ROBUST FIX: Initialize variables at the top ---
         response_content, response_data = "An unknown action occurred.", None
 
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
