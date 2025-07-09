@@ -5,6 +5,7 @@ import google.generativeai as genai
 import re
 import io
 import numpy as np
+import warnings
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -13,6 +14,11 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
+
+# --- Suppress specific, harmless warnings from scikit-learn ---
+warnings.filterwarnings("ignore", message="Skipping features without any observed values")
+warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None")
+
 
 # --- Core AI and Helper Functions ---
 
@@ -113,7 +119,6 @@ def train_and_score(df_train, df_predict):
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
-    # --- FINAL FIX IS HERE: Prepare data for scikit-learn ---
     # Convert pd.NA to np.nan for numeric columns
     for col in numeric_features:
         if col in df_train.columns:
