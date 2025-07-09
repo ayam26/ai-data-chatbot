@@ -195,14 +195,15 @@ if prompt := st.chat_input("What would you like to do?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+        # --- FINAL FIX IS HERE: Initialize variables at the top ---
+        response_content, response_data = "An unknown action occurred.", None
+
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
             st.warning("Please upload both a training and a prediction file first.")
         else:
             with st.spinner("🧠 AI is thinking..."):
                 ai_response = get_ai_response(model, prompt)
                 
-                response_content, response_data = "An unknown action occurred.", None
-
                 if ai_response == "TRAIN" or ai_response == "PREDICT":
                     try:
                         results_df, message = train_and_score(st.session_state.training_data, st.session_state.prediction_data)
@@ -217,4 +218,4 @@ if prompt := st.chat_input("What would you like to do?"):
                     response_content = ai_response
                     st.markdown(response_content)
             
-            st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
+        st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
