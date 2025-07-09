@@ -24,37 +24,32 @@ def get_ai_model():
         st.error(f"❌ Failed to configure AI model: {e}")
         return None
 
-def generate_code(model, prompt, df_dict):
-    """Uses the LLM to convert a prompt into executable code."""
+def get_ai_response(model, prompt, df_dict):
+    """
+    Uses the LLM to generate either a conversational response or executable code.
+    """
     if model is None: return "ERROR: AI model is not configured."
     df_names = list(df_dict.keys())
     primary_df_name = df_names[0] if df_names else ''
     primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
 
+    # --- UPDATED: New System Prompt for Conversational AI ---
     system_prompt = f"""
-    You are an expert Python data analyst. Your task is to convert a user's request into a single,
-    executable line of Python code using pandas, plotly express, or a custom function.
+    You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
+    1.  **Data Analyst Mode**: If the user's request is about manipulating or analyzing data (e.g., 'filter', 'sort', 'plot', 'train', 'predict'), you MUST respond ONLY with a single, executable line of Python code.
+    2.  **Conversational Mode**: If the user asks a general question or gives a greeting (e.g., 'hi', 'how are you?', 'what can you do?'), respond with a friendly, helpful text message. Do NOT generate code.
+
+    **Decision-Making:**
+    - If the prompt contains data-related keywords like 'filter', 'sort', 'plot', 'chart', 'visualize', 'train', 'predict', 'rename', 'merge', 'clean', or mentions column names ({primary_df_columns}), assume it's a data task and generate code.
+    - Otherwise, assume it's conversational.
+
+    **Code Generation Rules (Data Analyst Mode Only):**
     - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
     - The primary DataFrame is `df = df_dict['{primary_df_name}']` if it exists.
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - Available columns in the primary DataFrame are: {primary_df_columns}.
-
-    NEW CAPABILITIES:
-    1. TRAINING: If the user wants to TRAIN a model, generate this exact code:
-       message = train_exit_model(df)
-    2. PREDICTING: If the user wants to PREDICT on a file using the SAVED model, generate:
-       df, message = predict_with_saved_model(df)
-
-    Examples:
-    User prompt: train a model to predict exits
-    Generated code: message = train_exit_model(df)
-
-    User prompt: use the trained model to predict on the 'new_companies' data
-    Generated code: df, message = predict_with_saved_model(df_dict['new_companies'])
-
-    User prompt: create a bar chart of the total Amount by Round
-    Generated code: fig = px.bar(df.groupby('Round')['Amount'].sum().reset_index(), x='Round', y='Amount', title='Total Investment Amount by Round')
+    - To train a model, generate: `message = train_exit_model(df)`
+    - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -81,9 +76,9 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns the original dataframe and a success message."""
+    """Trains a model and returns a success message."""
     if target_col not in df.columns:
-        return df, f"Error: Training data must have a '{target_col}' column."
+        return f"Error: Training data must have a '{target_col}' column."
     
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
@@ -103,9 +98,7 @@ def train_exit_model(df, target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    
-    return df, message
+    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions on a new DataFrame."""
@@ -126,7 +119,7 @@ def predict_with_saved_model(df):
 
 st.set_page_config(layout="wide")
 st.title("🧠 AI Predictive Analyst")
-st.caption("Train a model on one dataset, then predict on another.")
+st.caption("Your conversational partner for data analysis and prediction.")
 
 model = get_ai_model()
 
@@ -151,7 +144,6 @@ with st.sidebar:
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
     st.write(f"**Model Trained:** {'Yes' if st.session_state.trained_model else 'No'}")
 
-# --- CORRECTED NOTE: Display note for historical messages ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
@@ -159,30 +151,35 @@ for message in st.session_state.messages:
             st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
             st.dataframe(message["data"])
 
-if prompt := st.chat_input("Train a model or make a prediction?"):
+if prompt := st.chat_input("Ask a question or give a command..."):
     st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
-    with st.chat_message("user"): st.markdown(prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        if not st.session_state.df_dict:
+        if not st.session_state.df_dict and "load" not in prompt.lower():
             st.warning("Please upload at least one data file first.")
         else:
-            with st.spinner("🧠 AI is thinking..."):
-                primary_df_name = list(st.session_state.df_dict.keys())[0]
-                df_copy = st.session_state.df_dict[primary_df_name].copy()
+            with st.spinner("🧠 Thinking..."):
+                primary_df_name = list(st.session_state.df_dict.keys())[0] if st.session_state.df_dict else None
+                df_copy = st.session_state.df_dict[primary_df_name].copy() if primary_df_name else None
 
-                code_to_run = generate_code(model, prompt, st.session_state.df_dict)
+                ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                 
-                if code_to_run.startswith("ERROR:"):
-                    response_content = f"❌ {code_to_run}"
+                # --- UPDATED LOGIC: Check if the response is code or conversational text ---
+                code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
+                is_code = any(keyword in ai_response for keyword in code_keywords)
+
+                if ai_response.startswith("ERROR:"):
+                    response_content = f"❌ {ai_response}"
                     st.error(response_content)
-                else:
-                    st.code(code_to_run, language="python")
+                elif is_code:
+                    st.code(ai_response, language="python")
                     local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                     response_content, response_data = "An unknown action occurred.", None
                     
                     try:
-                        exec(code_to_run, globals(), local_vars)
+                        exec(ai_response, globals(), local_vars)
                         
                         df_result = local_vars.get('df')
                         
@@ -201,12 +198,14 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
 
                         st.markdown(response_content)
                         if response_data is not None:
-                            # --- CORRECTED NOTE: Display note for new messages ---
                             st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
                             st.dataframe(response_data)
 
                     except Exception as e:
                         response_content = f"❌ Error executing code: {e}"
                         st.error(response_content)
+                else: # It's a conversational response
+                    response_content = ai_response
+                    st.markdown(response_content)
             
-            st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
+            st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data if 'response_data' in locals() else None})
