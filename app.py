@@ -36,8 +36,9 @@ def get_ai_response(model, prompt, df_dict):
     
     trained_on_file = st.session_state.get('trained_on_file', 'None')
 
+    # --- UPDATED: System prompt now includes visualization instructions ---
     system_prompt = f"""
-    You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
+    You are a helpful AI assistant with three modes: Data Analyst, Visualizer, and Conversationalist.
 
     Your current context:
     - Available DataFrames: {df_names}
@@ -45,17 +46,21 @@ def get_ai_response(model, prompt, df_dict):
     - A model has been trained: {'Yes' if st.session_state.trained_model else 'No'}
     - Model was trained on: '{trained_on_file}'
 
-    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data (e.g., 'filter...', 'sort...', 'plot...', 'train...'), you MUST respond ONLY with a single, executable line of Python code.
-    2.  **Conversational Mode**: If the user asks a question about the process or the model's status (e.g., 'how do you work?', 'which file was used for training?'), or gives a greeting, respond with a friendly, helpful text message using the context above. Do NOT generate code.
+    1.  **Visualizer Mode**: If the user asks to "plot", "chart", "visualize", or "graph", generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
+    2.  **Data Analyst Mode**: For other data manipulation commands (e.g., 'filter', 'sort', 'train'), generate a single line of Python pandas code.
+    3.  **Conversational Mode**: For questions or greetings, respond with a friendly text message.
 
     **Decision-Making:**
-    - If the prompt starts with "how", "what", "why", "explain", "tell me", "was the model trained on", or is a greeting, ALWAYS use Conversational Mode.
-    - Otherwise, if the prompt contains data-related keywords like 'filter', 'sort', 'plot', 'train', 'predict', 'rename', assume it's a data task and generate code.
+    - If the prompt contains "plot", "chart", "visualize", or "graph", use Visualizer Mode.
+    - If it contains other data keywords like 'filter', 'sort', 'train', 'predict', use Data Analyst Mode.
+    - Otherwise, use Conversational Mode.
 
-    **Code Generation Rules (Data Analyst Mode Only):**
+    **Code Generation Rules:**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `model, features, message = train_exit_model(df)`
-    - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
+    - To train a model, generate: `message = train_exit_model(df)`
+    - To predict, generate: `df, message = predict_with_saved_model(df)`
+    - To create a bar chart, generate: `fig = px.bar(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
+    - To create a scatter plot, generate: `fig = px.scatter(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -82,15 +87,18 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns the model, features, and a success message."""
+    """Trains a model and returns a success message."""
     if target_col not in df.columns:
-        return None, None, f"Error: Training data must have a '{target_col}' column."
+        return f"Error: Training data must have a '{target_col}' column."
     
+    primary_df_name = [name for name, data in st.session_state.df_dict.items() if data.equals(df)][0]
+
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
     
     df_for_ml = pd.get_dummies(df[feature_cols], dummy_na=True).fillna(0)
-    
+    st.session_state.trained_features = df_for_ml.columns.tolist()
+
     X = df_for_ml
     y = df[target_col].fillna(0)
     
@@ -100,11 +108,11 @@ def train_exit_model(df, target_col='Exit'):
     
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
+    st.session_state.trained_model = model
+    st.session_state.trained_on_file = primary_df_name
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
-    
-    return model, df_for_ml.columns.tolist(), message
+    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions, create a score, and sort."""
@@ -122,14 +130,14 @@ def predict_with_saved_model(df):
     
     df = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
-    message = f"✅ Predictions made using the saved model. Displaying top potential exits."
+    message = f"✅ Predictions made and scored. Displaying top potential exits."
     return df, message
 
 # --- Streamlit App UI and Logic ---
 
 st.set_page_config(layout="wide")
-st.title("🧠 AI Predictive Analyst")
-st.caption("Your conversational partner for data analysis and prediction.")
+st.title("📊 AI Data Analyst")
+st.caption("Your conversational partner for analysis, prediction, and visualization.")
 
 model = get_ai_model()
 
@@ -165,14 +173,17 @@ for message in st.session_state.messages:
         if message.get("data") is not None:
             st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
             st.dataframe(message["data"])
+        if message.get("chart") is not None:
+            st.plotly_chart(message["chart"], use_container_width=True)
+
 
 if prompt := st.chat_input("Ask a question or give a command..."):
-    st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
+    st.session_state.messages.append({"role": "user", "content": prompt, "data": None, "chart": None})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        if not st.session_state.df_dict and "load" not in prompt.lower():
+        if not st.session_state.df_dict:
             st.warning("Please upload at least one data file first.")
         else:
             with st.spinner("🧠 Thinking..."):
@@ -203,13 +214,13 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         except Exception as e:
                             response_content = f"❌ Error creating download link: {e}"
                             st.error(response_content)
-                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None})
+                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None, "chart": None})
                 else:
                     ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                     
                     cleaned_response = ai_response.strip().strip('`')
 
-                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =', 'model, features, message =']
+                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
                     is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
                     if cleaned_response.startswith("ERROR:"):
@@ -218,37 +229,35 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                     elif is_code:
                         st.code(cleaned_response, language="python")
                         local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
-                        response_content, response_data = "An unknown action occurred.", None
+                        response_content, response_data, response_chart = "An unknown action occurred.", None, None
                         
                         try:
                             exec(cleaned_response, globals(), local_vars)
                             
-                            # --- FINAL FIX IS HERE: Explicitly update session state from local_vars ---
-                            if 'model' in local_vars:
-                                st.session_state.trained_model = local_vars['model']
-                                st.session_state.trained_features = local_vars['features']
-                                st.session_state.trained_on_file = primary_df_name
-                                response_content = local_vars['message']
-                                response_data = df_copy.head() # Show the head of the data that was just trained on
-                            elif 'message' in local_vars:
-                                response_content = local_vars['message']
-                                df_result = local_vars.get('df')
-                                if isinstance(df_result, pd.DataFrame):
-                                    st.session_state.df_dict[primary_df_name] = df_result
-                                    response_data = df_result.head()
+                            if local_vars.get("fig") is not None:
+                                response_chart = local_vars["fig"]
+                                response_content = f"✅ Here is your interactive chart for '{prompt}'"
                             else:
                                 df_result = local_vars.get('df')
-                                if isinstance(df_result, pd.DataFrame):
-                                    st.session_state.df_dict[primary_df_name] = df_result
-                                    response_content = "✅ Command executed successfully."
-                                    response_data = df_result.head()
+                                if 'message' in local_vars:
+                                    response_content = local_vars['message']
+                                    if isinstance(df_result, pd.DataFrame):
+                                        st.session_state.df_dict[primary_df_name] = df_result
+                                        response_data = df_result.head()
                                 else:
-                                    response_content = f"✅ Command executed. Result: {df_result}"
+                                    if isinstance(df_result, pd.DataFrame):
+                                        st.session_state.df_dict[primary_df_name] = df_result
+                                        response_content = "✅ Command executed successfully."
+                                        response_data = df_result.head()
+                                    else:
+                                        response_content = f"✅ Command executed. Result: {df_result}"
 
                             st.markdown(response_content)
                             if response_data is not None:
                                 st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
                                 st.dataframe(response_data)
+                            if response_chart is not None:
+                                st.plotly_chart(response_chart, use_container_width=True)
 
                         except Exception as e:
                             response_content = f"❌ Error executing code: {e}"
@@ -257,4 +266,4 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         response_content = cleaned_response
                         st.markdown(response_content)
                 
-                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data if 'response_data' in locals() else None})
+                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart if 'response_chart' in locals() else None})
