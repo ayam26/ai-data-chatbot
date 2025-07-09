@@ -57,13 +57,6 @@ def get_ai_response(model, prompt, df_dict):
 
     User: "sort by Total Funding Amount descending"
     Generated code: `df = df.sort_values(by='Total Funding Amount', ascending=False)`
-
-    **Example Interaction:**
-    User: "how do you train the model?"
-    AI Response (Conversational): "I use a RandomForestClassifier model from the scikit-learn library. I take all the relevant columns as features, split the data into training and testing sets, and then train the model to recognize patterns that lead to an exit. The accuracy is then calculated on the test set."
-
-    User: "train a model to predict exits"
-    AI Response (Code): `message = train_exit_model(df)`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -202,28 +195,30 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                             )
                             response_content = f"Your file is ready. Click the button above to download."
-                            st.markdown(response_content) # Use markdown to render the button
+                            st.markdown(response_content)
                         except Exception as e:
                             response_content = f"❌ Error creating download link: {e}"
                             st.error(response_content)
                     st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None})
                 else:
-                    # Use AI for all other commands
                     ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                     
-                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
-                    is_code = any(keyword in ai_response for keyword in code_keywords)
+                    # --- FINAL FIX IS HERE: Clean the AI response ---
+                    cleaned_response = ai_response.strip().strip('`')
 
-                    if ai_response.startswith("ERROR:"):
-                        response_content = f"❌ {ai_response}"
+                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
+                    is_code = any(keyword in cleaned_response for keyword in code_keywords)
+
+                    if cleaned_response.startswith("ERROR:"):
+                        response_content = f"❌ {cleaned_response}"
                         st.error(response_content)
                     elif is_code:
-                        st.code(ai_response, language="python")
+                        st.code(cleaned_response, language="python")
                         local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                         response_content, response_data = "An unknown action occurred.", None
                         
                         try:
-                            exec(ai_response, globals(), local_vars)
+                            exec(cleaned_response, globals(), local_vars)
                             
                             df_result = local_vars.get('df')
                             
@@ -249,7 +244,7 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                             response_content = f"❌ Error executing code: {e}"
                             st.error(response_content)
                     else: # It's a conversational response
-                        response_content = ai_response
+                        response_content = cleaned_response
                         st.markdown(response_content)
                 
                     st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data if 'response_data' in locals() else None})
