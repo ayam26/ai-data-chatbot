@@ -132,10 +132,10 @@ def predict_with_saved_model(df):
     
     df_sorted = df.sort_values(by='Exit Score (1-100)', ascending=False)
     
-    # --- NEW: Create a concise summary DataFrame ---
-    summary_df = df_sorted[['Organization Name', 'Exit Score (1-100)']]
+    # --- UPDATED: Create a concise summary DataFrame ---
+    summary_df = df_sorted[['Organization Name', 'Exit Score (1-100)']].head(20)
     
-    message = f"✅ Predictions made and scored. Here are the top potential exits:"
+    message = f"✅ Predictions made and scored. Here are the top 20 potential exits:"
     return summary_df, message
 
 # --- Streamlit App UI and Logic ---
