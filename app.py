@@ -180,48 +180,67 @@ if prompt := st.chat_input("Ask a question or give a command..."):
             with st.spinner("🧠 Thinking..."):
                 primary_df_name = list(st.session_state.df_dict.keys())[0] if st.session_state.df_dict else None
                 df_copy = st.session_state.df_dict[primary_df_name].copy() if primary_df_name else None
-
-                ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                 
-                code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
-                is_code = any(keyword in ai_response for keyword in code_keywords)
+                # --- NEW: Handle built-in 'save' command ---
+                parts = prompt.split()
+                command = parts[0].lower() if parts else ""
 
-                if ai_response.startswith("ERROR:"):
-                    response_content = f"❌ {ai_response}"
-                    st.error(response_content)
-                elif is_code:
-                    st.code(ai_response, language="python")
-                    local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
-                    response_content, response_data = "An unknown action occurred.", None
+                if command == "save":
+                    if df_copy is None:
+                        st.warning("Please upload a file first.")
+                    else:
+                        try:
+                            output_path = parts[1]
+                            df_copy.to_excel(output_path, index=False)
+                            response_content = f"✅ Successfully saved the current data to `{output_path}`"
+                            st.success(response_content)
+                        except Exception as e:
+                            response_content = f"❌ Error saving file: {e}"
+                            st.error(response_content)
+                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": None})
+                else:
+                    # Use AI for all other commands
+                    ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                     
-                    try:
-                        exec(ai_response, globals(), local_vars)
-                        
-                        df_result = local_vars.get('df')
-                        
-                        if 'message' in local_vars:
-                            response_content = local_vars['message']
-                            if isinstance(df_result, pd.DataFrame):
-                                st.session_state.df_dict[primary_df_name] = df_result
-                                response_data = df_result.head()
-                        else:
-                            if isinstance(df_result, pd.DataFrame):
-                                st.session_state.df_dict[primary_df_name] = df_result
-                                response_content = "✅ Command executed successfully."
-                                response_data = df_result.head()
-                            else:
-                                response_content = f"✅ Command executed. Result: {df_result}"
+                    code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
+                    is_code = any(keyword in ai_response for keyword in code_keywords)
 
-                        st.markdown(response_content)
-                        if response_data is not None:
-                            st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
-                            st.dataframe(response_data)
-
-                    except Exception as e:
-                        response_content = f"❌ Error executing code: {e}"
+                    if ai_response.startswith("ERROR:"):
+                        response_content = f"❌ {ai_response}"
                         st.error(response_content)
-                else: # It's a conversational response
-                    response_content = ai_response
-                    st.markdown(response_content)
-            
-            st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data if 'response_data' in locals() else None})
+                    elif is_code:
+                        st.code(ai_response, language="python")
+                        local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                        response_content, response_data = "An unknown action occurred.", None
+                        
+                        try:
+                            exec(ai_response, globals(), local_vars)
+                            
+                            df_result = local_vars.get('df')
+                            
+                            if 'message' in local_vars:
+                                response_content = local_vars['message']
+                                if isinstance(df_result, pd.DataFrame):
+                                    st.session_state.df_dict[primary_df_name] = df_result
+                                    response_data = df_result.head()
+                            else:
+                                if isinstance(df_result, pd.DataFrame):
+                                    st.session_state.df_dict[primary_df_name] = df_result
+                                    response_content = "✅ Command executed successfully."
+                                    response_data = df_result.head()
+                                else:
+                                    response_content = f"✅ Command executed. Result: {df_result}"
+
+                            st.markdown(response_content)
+                            if response_data is not None:
+                                st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
+                                st.dataframe(response_data)
+
+                        except Exception as e:
+                            response_content = f"❌ Error executing code: {e}"
+                            st.error(response_content)
+                    else: # It's a conversational response
+                        response_content = ai_response
+                        st.markdown(response_content)
+                
+                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data if 'response_data' in locals() else None})
