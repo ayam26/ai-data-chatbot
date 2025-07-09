@@ -33,7 +33,6 @@ def get_ai_response(model, prompt, df_dict):
     primary_df_name = df_names[0] if df_names else ''
     primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
 
-    # --- UPDATED: Smarter System Prompt ---
     system_prompt = f"""
     You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
@@ -108,7 +107,7 @@ def train_exit_model(df, target_col='Exit'):
     return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
 
 def predict_with_saved_model(df):
-    """Uses the saved model to make predictions on a new DataFrame."""
+    """Uses the saved model to make predictions, create a score, and sort."""
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         return df, "Error: You must train a model first before making predictions."
     
@@ -118,8 +117,14 @@ def predict_with_saved_model(df):
     df_processed = pd.get_dummies(df).fillna(0)
     df_processed = df_processed.reindex(columns=trained_features, fill_value=0)
     
-    df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1].round(4)
-    message = f"✅ Predictions made using the saved model. Added 'Exit_Probability' column."
+    # --- NEW: Scoring and Sorting Logic ---
+    df['Exit_Probability'] = model.predict_proba(df_processed)[:, 1]
+    df['Exit Score (1-100)'] = (df['Exit_Probability'] * 100).round().astype(int)
+    
+    # Sort by the new score in descending order
+    df = df.sort_values(by='Exit Score (1-100)', ascending=False)
+    
+    message = f"✅ Predictions made and scored. Displaying top potential exits."
     return df, message
 
 # --- Streamlit App UI and Logic ---
