@@ -54,7 +54,7 @@ def get_ai_response(model, prompt, df_dict):
 
     **Code Generation Rules (Data Analyst Mode Only):**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `message = train_exit_model(df)`
+    - To train a model, generate: `message = train_exit_model()`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
     """
     try:
@@ -81,13 +81,14 @@ def clean_monetary_columns(df):
             ).fillna(0)
     return df
 
-def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns a success message."""
+def train_exit_model(target_col='Exit'):
+    """Trains a model using the primary dataframe from session state."""
+    primary_df_name = list(st.session_state.df_dict.keys())[0]
+    df = st.session_state.df_dict[primary_df_name]
+
     if target_col not in df.columns:
         return f"Error: Training data must have a '{target_col}' column."
     
-    primary_df_name = [name for name, data in st.session_state.df_dict.items() if data.equals(df)][0]
-
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
     
@@ -147,11 +148,10 @@ with st.sidebar:
     st.header("Upload Your Data")
     uploaded_files = st.file_uploader("Upload training and prediction files", type=["xlsx", "csv"], accept_multiple_files=True)
     
-    # --- FINAL FIX IS HERE: Don't reset the whole dict on new uploads ---
     if uploaded_files:
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
-            if file_key not in st.session_state.df_dict: # Only load new files
+            if file_key not in st.session_state.df_dict:
                 df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
                 st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
                 st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
@@ -221,6 +221,7 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         st.error(response_content)
                     elif is_code:
                         st.code(cleaned_response, language="python")
+                        # --- ROBUST FIX: Pass the correct dataframe to exec ---
                         local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                         response_content, response_data = "An unknown action occurred.", None
                         
