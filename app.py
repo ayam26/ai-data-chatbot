@@ -197,7 +197,6 @@ with st.sidebar:
         st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
         st.success(f"Loaded and prepared '{predict_file.name}'.")
 
-    # --- RESTORED: "Model Trained" status display ---
     st.header("Analysis Status")
     model_status = "Yes" if st.session_state.trained_model else "No"
     trained_file_info = f" (on `{st.session_state.trained_on_file}`)" if st.session_state.trained_on_file else ""
@@ -216,11 +215,12 @@ if prompt := st.chat_input("What would you like to do?"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        # --- ROBUST FIX: Initialize variables at the top ---
-        response_content, response_data = "An unknown action occurred.", None
+        # --- ROBUST FIX: Initialize all response variables ---
+        response_content, response_data = None, None
 
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
             st.warning("Please upload both a training and a prediction file first.")
+            response_content = "Please upload both a training and a prediction file first."
         else:
             with st.spinner("🧠 AI is thinking..."):
                 ai_response = get_ai_response(model, prompt)
