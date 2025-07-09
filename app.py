@@ -33,16 +33,16 @@ def get_ai_response(model, prompt, df_dict):
     primary_df_name = df_names[0] if df_names else ''
     primary_df_columns = list(df_dict.get(primary_df_name, pd.DataFrame()).columns)
 
-    # --- UPDATED: New System Prompt for Conversational AI ---
+    # --- UPDATED: Smarter System Prompt ---
     system_prompt = f"""
     You are a helpful AI assistant with two modes: Data Analyst and Conversationalist.
 
-    1.  **Data Analyst Mode**: If the user's request is about manipulating or analyzing data (e.g., 'filter', 'sort', 'plot', 'train', 'predict'), you MUST respond ONLY with a single, executable line of Python code.
-    2.  **Conversational Mode**: If the user asks a general question or gives a greeting (e.g., 'hi', 'how are you?', 'what can you do?'), respond with a friendly, helpful text message. Do NOT generate code.
+    1.  **Data Analyst Mode**: If the user gives a direct command to manipulate or analyze data (e.g., 'filter...', 'sort...', 'plot...', 'train...'), you MUST respond ONLY with a single, executable line of Python code.
+    2.  **Conversational Mode**: If the user asks a question (especially starting with 'how', 'what', 'why', 'explain') or gives a greeting, respond with a friendly, helpful text message. Do NOT generate code for these.
 
     **Decision-Making:**
-    - If the prompt contains data-related keywords like 'filter', 'sort', 'plot', 'chart', 'visualize', 'train', 'predict', 'rename', 'merge', 'clean', or mentions column names ({primary_df_columns}), assume it's a data task and generate code.
-    - Otherwise, assume it's conversational.
+    - If the prompt starts with "how", "what", "why", "explain", "tell me", or is a greeting, ALWAYS use Conversational Mode.
+    - Otherwise, if the prompt contains data-related keywords like 'filter', 'sort', 'plot', 'train', 'predict', 'rename', assume it's a data task and generate code.
 
     **Code Generation Rules (Data Analyst Mode Only):**
     - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
@@ -50,6 +50,13 @@ def get_ai_response(model, prompt, df_dict):
     - The output MUST be a single line of code. Do NOT use markdown or comments.
     - To train a model, generate: `message = train_exit_model(df)`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
+
+    **Example Interaction:**
+    User: "how do you train the model?"
+    AI Response (Conversational): "I use a RandomForestClassifier model from the scikit-learn library. I take all the relevant columns as features, split the data into training and testing sets, and then train the model to recognize patterns that lead to an exit. The accuracy is then calculated on the test set."
+
+    User: "train a model to predict exits"
+    AI Response (Code): `message = train_exit_model(df)`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -166,7 +173,6 @@ if prompt := st.chat_input("Ask a question or give a command..."):
 
                 ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                 
-                # --- UPDATED LOGIC: Check if the response is code or conversational text ---
                 code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
                 is_code = any(keyword in ai_response for keyword in code_keywords)
 
