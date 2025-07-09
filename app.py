@@ -151,6 +151,7 @@ with st.sidebar:
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
     st.write(f"**Model Trained:** {'Yes' if st.session_state.trained_model else 'No'}")
 
+# --- CORRECTED NOTE: Display note for historical messages ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"], unsafe_allow_html=True)
@@ -200,7 +201,7 @@ if prompt := st.chat_input("Train a model or make a prediction?"):
 
                         st.markdown(response_content)
                         if response_data is not None:
-                            # --- ADDED THIS NOTE ---
+                            # --- CORRECTED NOTE: Display note for new messages ---
                             st.caption("Displaying the first 5 rows as a preview. The full dataset has been updated in memory.")
                             st.dataframe(response_data)
 
