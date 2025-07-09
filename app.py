@@ -48,7 +48,7 @@ def get_ai_response(model, prompt, df_dict):
     - You have access to a dictionary of DataFrames named `df_dict`. Available DataFrames: {df_names}.
     - The primary DataFrame is `df = df_dict['{primary_df_name}']` if it exists.
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `message = train_exit_model(df)`
+    - To train a model, generate: `df, message = train_exit_model(df)`
     - To predict with a saved model, generate: `df, message = predict_with_saved_model(df)`
 
     **PANDAS EXAMPLES:**
@@ -83,9 +83,9 @@ def clean_monetary_columns(df):
     return df
 
 def train_exit_model(df, target_col='Exit'):
-    """Trains a model and returns a success message."""
+    """Trains a model and returns the cleaned dataframe and a success message."""
     if target_col not in df.columns:
-        return f"Error: Training data must have a '{target_col}' column."
+        return df, f"Error: Training data must have a '{target_col}' column."
     
     feature_cols = [col for col in df.columns if col not in [target_col, 'Organization Name', 'Description', 'Top 5 Investors', 'Exit Date', 'Founded Date', 'Last Funding Date']]
     feature_cols = [col for col in feature_cols if col in df.columns]
@@ -105,7 +105,9 @@ def train_exit_model(df, target_col='Exit'):
     st.session_state.trained_model = model
 
     accuracy = accuracy_score(y_test, model.predict(X_test))
-    return f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    message = f"✅ RandomForest model trained with an accuracy of {accuracy:.2%}. It is now saved and ready for predictions."
+    
+    return df, message
 
 def predict_with_saved_model(df):
     """Uses the saved model to make predictions, create a score, and sort."""
@@ -148,8 +150,8 @@ with st.sidebar:
         for uploaded_file in uploaded_files:
             file_key = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.splitext(uploaded_file.name)[0]).lower()
             df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.session_state.df_dict[file_key] = clean_monetary_columns(df_raw)
-            st.success(f"Loaded and cleaned '{uploaded_file.name}' as '{file_key}'.")
+            st.session_state.df_dict[file_key] = df_raw # Store raw data
+            st.success(f"Loaded '{uploaded_file.name}' as '{file_key}'.")
     
     st.header("Analysis Status")
     st.write(f"**Datasets Loaded:** {', '.join(st.session_state.df_dict.keys()) or 'None'}")
@@ -203,7 +205,6 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                 else:
                     ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                     
-                    # --- FINAL FIX IS HERE: Clean the AI response ---
                     cleaned_response = ai_response.strip().strip('`')
 
                     code_keywords = ['df =', 'fig =', 'message =', 'df, message =']
@@ -214,7 +215,9 @@ if prompt := st.chat_input("Ask a question or give a command..."):
                         st.error(response_content)
                     elif is_code:
                         st.code(cleaned_response, language="python")
-                        local_vars = {"df": df_copy, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
+                        # --- ROBUST FIX: Always clean the data before using it ---
+                        cleaned_df_for_exec = clean_monetary_columns(df_copy)
+                        local_vars = {"df": cleaned_df_for_exec, "pd": pd, "px": px, "train_exit_model": train_exit_model, "predict_with_saved_model": predict_with_saved_model, "df_dict": st.session_state.df_dict}
                         response_content, response_data = "An unknown action occurred.", None
                         
                         try:
