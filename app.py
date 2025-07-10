@@ -14,6 +14,12 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
+import plotly.express as px
+
+# --- Suppress specific, harmless warnings from scikit-learn ---
+warnings.filterwarnings("ignore", message="Skipping features without any observed values")
+warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None")
+
 
 # --- Core AI and Helper Functions ---
 
@@ -37,11 +43,19 @@ def get_ai_response(model, prompt):
     """
     if model is None: return "ERROR: AI model is not configured."
     
+    # --- UPDATED: Stricter System Prompt ---
     system_prompt = """
-    You are a helpful AI assistant. Your job is to determine the user's intent.
-    - If the user asks to "train", "build a model", or "run the predictor", respond with the single word: TRAIN
-    - If the user asks to "predict", "score new companies", or "use the model", respond with the single word: PREDICT
-    - For any other question or greeting, provide a friendly, conversational response.
+    You are a helpful AI assistant. Your job is to determine the user's intent and respond in one of three modes.
+
+    1.  **Visualizer Mode**: If the prompt contains "plot", "chart", "visualize", or "graph", you MUST generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
+    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "filter", "sort", "train", or "predict", you MUST generate a single line of Python code to perform that action.
+    3.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response. Do NOT generate code.
+
+    **Code Generation Rules:**
+    - The output MUST be a single line of code. Do NOT use markdown or comments.
+    - To train a model, generate: `message = train_and_score()`
+    - To predict with a saved model, generate: `results_df, message = train_and_score()`
+    - To create a bar chart, generate: `fig = px.bar(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -49,21 +63,19 @@ def get_ai_response(model, prompt):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
-# --- Advanced Data Processing and Modeling (from predictor.py) ---
+# --- Advanced Data Processing and Modeling ---
 
 def clean_and_feature_engineer(df):
     """
-    Performs all advanced cleaning and feature engineering from predictor.py.
+    Performs all advanced cleaning and feature engineering.
     """
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
 
-    # 1. Clean Headquarters Location -> Only Country
     def get_country(location):
         return str(location).split(',')[-1].strip() if isinstance(location, str) else 'Unknown'
     df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
 
-    # 2. Create Top Industry
     industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
     industry_map = {'Artificial Intelligence (AI)': 'AI', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
     def get_top_industry(row):
@@ -75,14 +87,12 @@ def clean_and_feature_engineer(df):
         return 'Other'
     df['Top Industry'] = df.apply(get_top_industry, axis=1)
 
-    # 3. Clean Date Columns -> Year only
     def get_year(date):
         match = re.search(r'\b\d{4}\b', str(date))
         return pd.to_numeric(match.group(0), errors='coerce') if match else pd.NA
     df['Founded Year'] = df['Founded Date'].apply(get_year)
     df['Exit Year'] = df['Exit Date'].apply(get_year)
 
-    # 4. Convert all monetary data to USD
     exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
     def convert_to_usd(value):
         if not isinstance(value, str): return pd.NA
@@ -98,42 +108,35 @@ def clean_and_feature_engineer(df):
     for col in money_cols:
         df[f"{col} (USD)"] = df[col].apply(convert_to_usd)
 
-    # 5. Create the final 'Exit' column if it doesn't exist
     if 'Exit' not in df.columns:
         df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or str(row.get('Funding Status')) in ['M&A', 'IPO'] else 0.0, axis=1)
     
     return df
 
-def train_and_score(df_train, df_predict):
+def train_and_score():
     """
-    Trains the advanced model on df_train and scores df_predict.
+    Trains the advanced model and scores the prediction data.
     """
-    # Define features for the advanced model
+    df_train = st.session_state.training_data
+    df_predict = st.session_state.prediction_data
+    
     target = 'Exit'
     numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
-    # Convert pd.NA to np.nan for numeric columns
     for col in numeric_features:
-        if col in df_train.columns:
-            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
-        if col in df_predict.columns:
-            df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+        if col in df_train.columns: df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+        if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
 
-    # Fill missing text values with empty strings
     for col in text_features:
-        if col in df_train.columns:
-            df_train[col] = df_train[col].fillna('')
-        if col in df_predict.columns:
-            df_predict[col] = df_predict[col].fillna('')
+        if col in df_train.columns: df_train[col] = df_train[col].fillna('')
+        if col in df_predict.columns: df_predict[col] = df_predict[col].fillna('')
 
-    # Ensure all feature columns exist, fill missing with placeholders
     for col in numeric_features + categorical_features + text_features:
         if col not in df_train.columns: df_train[col] = 'Unknown' if col in categorical_features or col in text_features else 0
         if col not in df_predict.columns: df_predict[col] = 'Unknown' if col in categorical_features or col in text_features else 0
 
-    # Preprocessing pipelines
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
     categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
     description_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(stop_words='english', max_features=150, ngram_range=(1,2)))])
@@ -152,22 +155,14 @@ def train_and_score(df_train, df_predict):
         ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))
     ])
 
-    # --- FINAL FIX IS HERE: Suppress warnings during training and prediction ---
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", message="Skipping features without any observed values")
-        warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will not be used since 'tokenizer' is not None")
-        
-        # Train the model
-        X_train = df_train.drop(columns=[target, 'Organization Name'], errors='ignore')
-        y_train = df_train[target]
-        model.fit(X_train, y_train)
-        accuracy = model.named_steps['classifier'].oob_score_
+    X_train = df_train.drop(columns=[target, 'Organization Name'], errors='ignore')
+    y_train = df_train[target]
+    model.fit(X_train, y_train)
+    accuracy = model.named_steps['classifier'].oob_score_
 
-        # Predict on the new data
-        X_predict = df_predict.drop(columns=[target, 'Organization Name'], errors='ignore')
-        probabilities = model.predict_proba(X_predict)[:, 1]
+    X_predict = df_predict.drop(columns=[target, 'Organization Name'], errors='ignore')
+    probabilities = model.predict_proba(X_predict)[:, 1]
     
-    # Create results dataframe
     results_df = pd.DataFrame({
         'Organization Name': df_predict['Organization Name'],
         'Success Score': (probabilities * 100).round().astype(int)
@@ -221,14 +216,16 @@ for message in st.session_state.messages:
         st.markdown(message["content"], unsafe_allow_html=True)
         if message.get("data") is not None:
             st.dataframe(message["data"])
+        if message.get("chart") is not None:
+            st.plotly_chart(message["chart"], use_container_width=True)
 
 if prompt := st.chat_input("What would you like to do?"):
-    st.session_state.messages.append({"role": "user", "content": prompt, "data": None})
+    st.session_state.messages.append({"role": "user", "content": prompt, "data": None, "chart": None})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        response_content, response_data = None, None
+        response_content, response_data, response_chart = None, None, None
 
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
             st.warning("Please upload both a training and a prediction file first.")
@@ -239,7 +236,7 @@ if prompt := st.chat_input("What would you like to do?"):
                 
                 if ai_response == "TRAIN" or ai_response == "PREDICT":
                     try:
-                        results_df, message = train_and_score(st.session_state.training_data, st.session_state.prediction_data)
+                        results_df, message = train_and_score()
                         response_content = message
                         response_data = results_df
                         st.markdown(response_content)
@@ -247,8 +244,20 @@ if prompt := st.chat_input("What would you like to do?"):
                     except Exception as e:
                         response_content = f"❌ Error during model training/prediction: {e}"
                         st.error(response_content)
+                elif ai_response.startswith("fig ="):
+                    try:
+                        df = st.session_state.prediction_data # Use prediction data for plotting
+                        local_vars = {"df": df, "px": px}
+                        exec(ai_response, globals(), local_vars)
+                        response_chart = local_vars["fig"]
+                        response_content = "✅ Here is your interactive chart:"
+                        st.markdown(response_content)
+                        st.plotly_chart(response_chart, use_container_width=True)
+                    except Exception as e:
+                        response_content = f"❌ Error creating chart: {e}"
+                        st.error(response_content)
                 else: # It's a conversational response
                     response_content = ai_response
                     st.markdown(response_content)
             
-        st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data})
+        st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart})
