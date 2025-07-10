@@ -86,9 +86,13 @@ def clean_and_feature_engineer(df):
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
 
-    def get_country(location):
-        return str(location).split(',')[-1].strip() if isinstance(location, str) else 'Unknown'
-    df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
+    # --- NEW: Added robust checks for column existence to prevent errors ---
+    if 'Headquarters Location' in df.columns:
+        def get_country(location):
+            return str(location).split(',')[-1].strip() if isinstance(location, str) else 'Unknown'
+        df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
+    else:
+        df['Headquarters Country'] = 'Unknown'
 
     industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
     industry_map = {'Artificial Intelligence (AI)': 'AI', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
@@ -104,8 +108,16 @@ def clean_and_feature_engineer(df):
     def get_year(date):
         match = re.search(r'\b\d{4}\b', str(date))
         return pd.to_numeric(match.group(0), errors='coerce') if match else pd.NA
-    df['Founded Year'] = df['Founded Date'].apply(get_year)
-    df['Exit Year'] = df['Exit Date'].apply(get_year)
+    
+    if 'Founded Date' in df.columns:
+        df['Founded Year'] = df['Founded Date'].apply(get_year)
+    else:
+        df['Founded Year'] = pd.NA
+        
+    if 'Exit Date' in df.columns:
+        df['Exit Year'] = df['Exit Date'].apply(get_year)
+    else:
+        df['Exit Year'] = pd.NA
 
     exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
     def convert_to_usd(value):
@@ -120,10 +132,11 @@ def clean_and_feature_engineer(df):
         
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
-        df[f"{col} (USD)"] = df[col].apply(convert_to_usd)
+        if col in df.columns:
+            df[f"{col} (USD)"] = df[col].apply(convert_to_usd)
 
     if 'Exit' not in df.columns:
-        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or str(row.get('Funding Status')) in ['M&A', 'IPO'] else 0.0, axis=1)
+        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row.get('Exit Year')) or str(row.get('Funding Status')) in ['M&A', 'IPO'] else 0.0, axis=1)
     
     return df
 
