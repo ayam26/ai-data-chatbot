@@ -37,25 +37,48 @@ def get_ai_model():
         st.error(f"❌ Failed to configure AI model: {e}")
         return None
 
-def get_ai_response(model, prompt):
+def get_ai_response(model, prompt, df_dict):
     """
-    Uses the LLM to generate a conversational response or a command.
+    Uses the LLM to generate either a conversational response or a command.
     """
     if model is None: return "ERROR: AI model is not configured."
     
-    # --- UPDATED: Stricter System Prompt ---
-    system_prompt = """
+    # --- RE-ARCHITECTED: Stricter System Prompt ---
+    df_names = list(df_dict.keys())
+    # Determine the primary dataframe for providing column context to the AI
+    if 'prediction_data' in st.session_state and st.session_state.prediction_data is not None:
+        context_df = st.session_state.prediction_data
+    elif 'training_data' in st.session_state and st.session_state.training_data is not None:
+        context_df = st.session_state.training_data
+    else:
+        context_df = pd.DataFrame() # No data loaded
+    
+    primary_df_columns = list(context_df.columns)
+
+    system_prompt = f"""
     You are a helpful AI assistant. Your job is to determine the user's intent and respond in one of three modes.
 
     1.  **Visualizer Mode**: If the prompt contains "plot", "chart", "visualize", or "graph", you MUST generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
-    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "filter", "sort", "train", or "predict", you MUST generate a single line of Python code to perform that action.
-    3.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response. Do NOT generate code.
+    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "train" or "predict", you MUST generate a single line of Python code to perform that action.
+    3.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response.
 
     **Code Generation Rules:**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
-    - To train a model, generate: `message = train_and_score()`
-    - To predict with a saved model, generate: `results_df, message = train_and_score()`
-    - To create a bar chart, generate: `fig = px.bar(df, x='X_COLUMN', y='Y_COLUMN', title='TITLE')`
+    - You MUST use the exact column names provided in the list below. Do NOT invent or assume column names.
+    - The dataframe to use is ALWAYS named `df`.
+
+    **Available Columns:**
+    `{primary_df_columns}`
+
+    **Plotting Examples:**
+    - User: "plot a bar chart of the total 'Total Funding Amount (USD)' for each 'Last Funding Type'"
+    - AI: `fig = px.bar(df.groupby('Last Funding Type')['Total Funding Amount (USD)'].sum().reset_index(), x='Last Funding Type', y='Total Funding Amount (USD)', title='Total Funding by Type')`
+    - User: "show a scatter plot of 'Total Funding Amount (USD)' vs 'Founded Year'"
+    - AI: `fig = px.scatter(df, x='Total Funding Amount (USD)', y='Founded Year', title='Funding vs. Founding Year')`
+    
+    **Training/Prediction Examples:**
+    - User: "train the model"
+    - AI: `message = train_and_score()`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -232,32 +255,42 @@ if prompt := st.chat_input("What would you like to do?"):
             response_content = "Please upload both a training and a prediction file first."
         else:
             with st.spinner("🧠 AI is thinking..."):
-                ai_response = get_ai_response(model, prompt)
+                ai_response = get_ai_response(model, prompt, st.session_state)
                 
-                if ai_response == "TRAIN" or ai_response == "PREDICT":
+                cleaned_response = ai_response.strip().strip('`')
+
+                code_keywords = ['fig =', 'train_and_score']
+                is_code = any(keyword in cleaned_response for keyword in code_keywords)
+
+                if cleaned_response.startswith("ERROR:"):
+                    response_content = f"❌ {cleaned_response}"
+                    st.error(response_content)
+                elif is_code:
+                    st.code(cleaned_response, language="python")
+                    # Determine which dataframe to use for the operation
+                    df_for_exec = st.session_state.prediction_data if "plot" in prompt or "chart" in prompt else st.session_state.training_data
+                    local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
+                    
                     try:
-                        results_df, message = train_and_score()
-                        response_content = message
-                        response_data = results_df
-                        st.markdown(response_content)
-                        st.dataframe(response_data)
+                        result = eval(cleaned_response, globals(), local_vars)
+                        
+                        if isinstance(result, tuple) and len(result) == 2: # Prediction
+                            results_df, message = result
+                            response_content = message
+                            response_data = results_df
+                            st.markdown(response_content)
+                            st.dataframe(response_data)
+                        else: # Plotly fig
+                            response_chart = result
+                            response_content = f"✅ Here is your interactive chart for '{prompt}'"
+                            st.markdown(response_content)
+                            st.plotly_chart(response_chart, use_container_width=True)
+
                     except Exception as e:
-                        response_content = f"❌ Error during model training/prediction: {e}"
-                        st.error(response_content)
-                elif ai_response.startswith("fig ="):
-                    try:
-                        df = st.session_state.prediction_data # Use prediction data for plotting
-                        local_vars = {"df": df, "px": px}
-                        exec(ai_response, globals(), local_vars)
-                        response_chart = local_vars["fig"]
-                        response_content = "✅ Here is your interactive chart:"
-                        st.markdown(response_content)
-                        st.plotly_chart(response_chart, use_container_width=True)
-                    except Exception as e:
-                        response_content = f"❌ Error creating chart: {e}"
+                        response_content = f"❌ Error executing code: {e}"
                         st.error(response_content)
                 else: # It's a conversational response
-                    response_content = ai_response
+                    response_content = cleaned_response
                     st.markdown(response_content)
             
         st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart})
