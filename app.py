@@ -127,12 +127,16 @@ def clean_and_feature_engineer(df):
     else:
         df['Exit Year'] = pd.NA
 
-    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
+    # --- FIX: More comprehensive and ordered exchange rates ---
+    exchange_rates = {
+        'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'SGD': 0.79, 
+        '₹': 0.012, 'INR': 0.012, 'IDR': 0.000062, 
+        '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14,
+        '€': 1.08, 'EUR': 1.08,
+        '$': 1.0, 'USD': 1.0,
+    }
     
     def convert_to_usd(value):
-        """
-        Robustly converts a string with currency symbols and multipliers (M, B) to USD.
-        """
         if pd.isna(value) or not isinstance(value, str):
             return np.nan
 
@@ -156,8 +160,9 @@ def clean_and_feature_engineer(df):
             return np.nan
 
         rate = 1.0
+        # Iterate through ordered keys to find the correct rate
         for symbol, r in exchange_rates.items():
-            if symbol != '$' and symbol in value_cleaned:
+            if symbol in value_cleaned:
                 rate = r
                 break
         
@@ -197,10 +202,10 @@ def train_and_score():
     for df in [df_train, df_predict]:
         for col in numeric_features:
             if col not in df.columns: df[col] = 0
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         for col in categorical_features:
             if col not in df.columns: df[col] = 'Unknown'
-            df[col] = df[col].astype(str)
+            df[col] = df[col].astype(str).fillna('Unknown')
         for col in text_features:
             if col not in df.columns: df[col] = ''
             df[col] = df[col].fillna('')
@@ -284,14 +289,12 @@ with st.sidebar:
     st.write(f"**Model Trained:** {model_status}{trained_file_info}")
 
 # --- Main chat interface ---
-# --- FIX: Use enumerate to get a unique index for the key ---
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message.get("data") is not None:
             st.dataframe(message["data"])
         if message.get("chart") is not None:
-            # --- FIX: Add a unique key to the chart element in the history loop ---
             st.plotly_chart(message["chart"], use_container_width=True, key=f"history_chart_{i}")
 
 if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'plot exits by country')"):
@@ -321,10 +324,25 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                 elif is_code:
                     st.code(cleaned_response, language="python")
                     df_for_exec = st.session_state.prediction_data if "plot" in prompt or "chart" in prompt else st.session_state.training_data
+                    
+                    # --- NEW: Add a diagnostic check before plotting ---
+                    if "px.bar" in cleaned_response:
+                        st.write("---")
+                        st.write("🔍 **Diagnostic Info:** Here's the data being plotted:")
+                        # Create the aggregated data to show the user
+                        agg_data = df_for_exec.groupby('Last Funding Type')['Total Funding Amount (USD)'].sum().reset_index()
+                        st.dataframe(agg_data)
+                        st.write("---")
+                        # Check if there is actually data to plot
+                        if agg_data['Total Funding Amount (USD)'].sum() == 0:
+                            st.warning("The plot is empty because the total funding amount for all categories is zero. Please check your data file.")
+                            cleaned_response = "" # Prevent the plot from running
+
                     local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
                     
                     try:
-                        exec(cleaned_response, globals(), local_vars)
+                        if cleaned_response: # Only execute if there is code to run
+                            exec(cleaned_response, globals(), local_vars)
                         
                         if local_vars.get("fig") is not None:
                             response_chart = local_vars["fig"]
@@ -341,7 +359,6 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                         if response_data is not None:
                             st.dataframe(response_data)
                         if response_chart is not None:
-                            # --- FIX: Add a unique key to the newly generated chart ---
                             st.plotly_chart(response_chart, use_container_width=True, key="new_chart")
 
                     except Exception as e:
