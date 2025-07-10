@@ -38,14 +38,23 @@ def get_ai_model():
         st.stop()
         return None
 
-# --- FIX #1: The function definition now only accepts two arguments. ---
 def get_ai_response(model, prompt):
     """
     Uses the LLM to generate either a conversational response or a command.
     """
     if model is None: return "ERROR: AI model is not configured."
     
-    context_df = st.session_state.get('prediction_data') or st.session_state.get('training_data') or pd.DataFrame()
+    # --- FIX: Explicitly check for DataFrames to avoid ambiguous truth value error ---
+    prediction_df = st.session_state.get('prediction_data')
+    training_df = st.session_state.get('training_data')
+
+    if prediction_df is not None:
+        context_df = prediction_df
+    elif training_df is not None:
+        context_df = training_df
+    else:
+        context_df = pd.DataFrame()
+        
     primary_df_columns = list(context_df.columns)
 
     system_prompt = f"""
@@ -271,7 +280,6 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
         else:
             with st.spinner("🧠 AI is thinking..."):
                 model = get_ai_model()
-                # --- FIX #2: The function call now correctly passes only two arguments. ---
                 ai_response = get_ai_response(model, prompt)
                 cleaned_response = ai_response.strip().strip('`').strip()
 
