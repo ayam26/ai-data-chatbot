@@ -57,12 +57,14 @@ def get_ai_response(model, prompt):
         
     primary_df_columns = list(context_df.columns)
 
+    # --- FIX: Upgraded the Data Analyst Mode instructions ---
     system_prompt = f"""
-    You are a helpful AI assistant. Your job is to determine the user's intent and respond in one of three modes.
+    You are a helpful AI assistant. Your job is to determine the user's intent and respond in one of four modes.
 
     1.  **Visualizer Mode**: If the prompt contains "plot", "chart", "visualize", or "graph", you MUST generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
-    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "filter", "sort", "train", or "predict", you MUST generate a single line of Python code to perform that action.
-    3.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response.
+    2.  **Training Mode**: If the prompt contains "train" or "predict", you MUST generate the specific command `results_df, message = train_and_score()`.
+    3.  **Data Analyst Mode**: If the prompt asks to "show", "sort", "filter", "display", or is a direct pandas command, you MUST generate a single line of Python code and assign the result to a variable named `result_data`.
+    4.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response.
 
     **Code Generation Rules:**
     - The output MUST be a single line of code. Do NOT use markdown or comments.
@@ -72,13 +74,19 @@ def get_ai_response(model, prompt):
     **Available Columns:**
     `{primary_df_columns}`
 
-    **Plotting Examples:**
+    **Plotting Example:**
     - User: "plot a bar chart of the total 'Total Funding Amount (USD)' for each 'Last Funding Type'"
     - AI: `fig = px.bar(df.groupby('Last Funding Type')['Total Funding Amount (USD)'].sum().reset_index(), x='Last Funding Type', y='Total Funding Amount (USD)', title='Total Funding by Type')`
     
-    **Training/Prediction Examples:**
+    **Training Example:**
     - User: "train the model"
     - AI: `results_df, message = train_and_score()`
+
+    **Data Analyst Example:**
+    - User: "show me the top 5 companies by funding"
+    - AI: `result_data = df.sort_values(by='Total Funding Amount (USD)', ascending=False).head(5)`
+    - User: `df[df['Top Industry'] == 'AI']`
+    - AI: `result_data = df[df['Top Industry'] == 'AI']`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -127,7 +135,6 @@ def clean_and_feature_engineer(df):
     else:
         df['Exit Year'] = pd.NA
 
-    # --- FIX: More comprehensive and ordered exchange rates ---
     exchange_rates = {
         'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'SGD': 0.79, 
         '₹': 0.012, 'INR': 0.012, 'IDR': 0.000062, 
@@ -160,7 +167,6 @@ def clean_and_feature_engineer(df):
             return np.nan
 
         rate = 1.0
-        # Iterate through ordered keys to find the correct rate
         for symbol, r in exchange_rates.items():
             if symbol in value_cleaned:
                 rate = r
@@ -314,7 +320,8 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                 ai_response = get_ai_response(model, prompt)
                 cleaned_response = ai_response.strip().strip('`').strip()
 
-                code_keywords = ['fig =', 'train_and_score']
+                # --- FIX: Updated keywords to include the new Data Analyst mode ---
+                code_keywords = ['fig =', 'train_and_score', 'result_data =']
                 is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
                 if cleaned_response.startswith("ERROR:"):
@@ -325,25 +332,23 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                     st.code(cleaned_response, language="python")
                     df_for_exec = st.session_state.prediction_data if "plot" in prompt or "chart" in prompt else st.session_state.training_data
                     
-                    # --- NEW: Add a diagnostic check before plotting ---
                     if "px.bar" in cleaned_response:
                         st.write("---")
                         st.write("🔍 **Diagnostic Info:** Here's the data being plotted:")
-                        # Create the aggregated data to show the user
                         agg_data = df_for_exec.groupby('Last Funding Type')['Total Funding Amount (USD)'].sum().reset_index()
                         st.dataframe(agg_data)
                         st.write("---")
-                        # Check if there is actually data to plot
                         if agg_data['Total Funding Amount (USD)'].sum() == 0:
                             st.warning("The plot is empty because the total funding amount for all categories is zero. Please check your data file.")
-                            cleaned_response = "" # Prevent the plot from running
+                            cleaned_response = "" 
 
                     local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
                     
                     try:
-                        if cleaned_response: # Only execute if there is code to run
+                        if cleaned_response: 
                             exec(cleaned_response, globals(), local_vars)
                         
+                        # --- FIX: Added logic to handle the new `result_data` variable ---
                         if local_vars.get("fig") is not None:
                             response_chart = local_vars["fig"]
                             response_content = f"✅ Here is your interactive chart for '{prompt}'"
@@ -351,6 +356,10 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                         elif 'results_df' in local_vars and 'message' in local_vars:
                             response_data = local_vars["results_df"]
                             response_content = local_vars["message"]
+
+                        elif 'result_data' in local_vars:
+                            response_data = local_vars['result_data']
+                            response_content = "✅ Here is the result of your query:"
 
                         else:
                             response_content = "✅ Command executed."
