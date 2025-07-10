@@ -44,7 +44,7 @@ def get_ai_response(model, prompt):
     """
     if model is None: return "ERROR: AI model is not configured."
     
-    # --- FIX: Explicitly check for DataFrames to avoid ambiguous truth value error ---
+    # Explicitly check for DataFrames to avoid ambiguous truth value error
     prediction_df = st.session_state.get('prediction_data')
     training_df = st.session_state.get('training_data')
 
@@ -95,7 +95,6 @@ def clean_and_feature_engineer(df):
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
 
-    # --- NEW: Added robust checks for column existence to prevent errors ---
     if 'Headquarters Location' in df.columns:
         def get_country(location):
             return str(location).split(',')[-1].strip() if isinstance(location, str) else 'Unknown'
@@ -129,20 +128,49 @@ def clean_and_feature_engineer(df):
         df['Exit Year'] = pd.NA
 
     exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
+    
+    # --- FIX: Replaced with a more robust currency conversion function ---
     def convert_to_usd(value):
-        if not isinstance(value, str): return pd.NA
-        value_cleaned = value.replace(',', '')
-        for symbol, rate in exchange_rates.items():
-            if symbol in value_cleaned:
-                numeric_part = re.search(r'[\d\.]+', value_cleaned)
-                if numeric_part: return float(numeric_part.group(0)) * rate
-        numeric_part = re.search(r'[\d\.]+', value_cleaned)
-        return float(numeric_part.group(0)) if numeric_part else pd.NA
+        """
+        Robustly converts a string with currency symbols and multipliers (M, B) to USD.
+        """
+        if pd.isna(value) or not isinstance(value, str):
+            return np.nan
+
+        value_cleaned = value.strip().replace(',', '')
+        if value_cleaned in ['-', 'Undisclosed', '']:
+            return np.nan
+
+        multiplier = 1.0
+        if 'B' in value_cleaned.upper():
+            multiplier = 1_000_000_000
+        elif 'M' in value_cleaned.upper():
+            multiplier = 1_000_000
+        
+        numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
+        if not numeric_part_str:
+            return np.nan
+
+        try:
+            numeric_value = float(numeric_part_str)
+        except (ValueError, TypeError):
+            return np.nan
+
+        rate = 1.0
+        for symbol, r in exchange_rates.items():
+            if symbol != '$' and symbol in value_cleaned:
+                rate = r
+                break
+        
+        return numeric_value * multiplier * rate
         
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
         if col in df.columns:
-            df[f"{col} (USD)"] = df[col].apply(convert_to_usd)
+            new_col_name = f"{col} (USD)"
+            df[new_col_name] = df[col].apply(convert_to_usd)
+            # --- NEW: Fill NaNs with 0 to ensure plotting always works ---
+            df[new_col_name] = df[new_col_name].fillna(0)
 
     if 'Exit' not in df.columns:
         df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row.get('Exit Year')) or str(row.get('Funding Status')) in ['M&A', 'IPO'] else 0.0, axis=1)
