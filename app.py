@@ -27,23 +27,24 @@ warnings.filterwarnings("ignore", message="The parameter 'token_pattern' will no
 def get_ai_model():
     """Configures and returns the AI model, cached for performance."""
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
+        api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not api_key:
-            st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
-            return None
+            st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets or as an environment variable.")
+            st.stop() # Stop execution if no key is found
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel('gemini-2.5-flash')
+        return genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
+        st.stop()
         return None
 
-def get_ai_response(model, prompt, df_dict):
+# --- FIX #1: The function definition now only accepts two arguments. ---
+def get_ai_response(model, prompt):
     """
     Uses the LLM to generate either a conversational response or a command.
     """
     if model is None: return "ERROR: AI model is not configured."
     
-    df_names = list(df_dict.keys())
     context_df = st.session_state.get('prediction_data') or st.session_state.get('training_data') or pd.DataFrame()
     primary_df_columns = list(context_df.columns)
 
@@ -68,7 +69,7 @@ def get_ai_response(model, prompt, df_dict):
     
     **Training/Prediction Examples:**
     - User: "train the model"
-    - AI: `message = train_and_score()`
+    - AI: `results_df, message = train_and_score()`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -129,29 +130,35 @@ def clean_and_feature_engineer(df):
 def train_and_score():
     """
     Trains the advanced model and scores the prediction data.
+    Returns a tuple: (results_dataframe, message_string)
     """
-    df_train = st.session_state.training_data
-    df_predict = st.session_state.prediction_data
+    if 'training_data' not in st.session_state or st.session_state.training_data is None:
+        return None, "ERROR: Training data is not loaded."
+    if 'prediction_data' not in st.session_state or st.session_state.prediction_data is None:
+        return None, "ERROR: Prediction data is not loaded."
+
+    df_train = st.session_state.training_data.copy()
+    df_predict = st.session_state.prediction_data.copy()
     
     target = 'Exit'
     numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
-    for col in numeric_features:
-        if col in df_train.columns: df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
-        if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
-
-    for col in text_features:
-        if col in df_train.columns: df_train[col] = df_train[col].fillna('')
-        if col in df_predict.columns: df_predict[col] = df_predict[col].fillna('')
-
-    for col in numeric_features + categorical_features + text_features:
-        if col not in df_train.columns: df_train[col] = 'Unknown' if col in categorical_features or col in text_features else 0
-        if col not in df_predict.columns: df_predict[col] = 'Unknown' if col in categorical_features or col in text_features else 0
+    # Ensure all feature columns exist and handle data types
+    for df in [df_train, df_predict]:
+        for col in numeric_features:
+            if col not in df.columns: df[col] = 0
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        for col in categorical_features:
+            if col not in df.columns: df[col] = 'Unknown'
+            df[col] = df[col].astype(str)
+        for col in text_features:
+            if col not in df.columns: df[col] = ''
+            df[col] = df[col].fillna('')
 
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
-    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))])
     description_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(stop_words='english', max_features=150, ngram_range=(1,2)))])
     investor_transformer = Pipeline(steps=[('tfidf', TfidfVectorizer(tokenizer=lambda x: [i.strip() for i in str(x).split(',')], max_features=100))])
 
@@ -193,62 +200,67 @@ st.set_page_config(layout="wide")
 st.title("🚀 Advanced AI Exit Predictor")
 st.caption("Powered by a custom data pipeline and machine learning model.")
 
-model = get_ai_model()
-
 # Initialize session state
+if "messages" not in st.session_state: st.session_state.messages = []
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
-if "messages" not in st.session_state: st.session_state.messages = []
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 if "trained_on_file" not in st.session_state: st.session_state.trained_on_file = None
+
 
 with st.sidebar:
     st.header("1. Upload Training Data")
     train_file = st.file_uploader("Upload your historical data with exit info", type=["xlsx", "csv"])
     if train_file:
-        df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
-        st.session_state.training_data = clean_and_feature_engineer(df_raw)
-        st.session_state.training_file_name = train_file.name
-        st.success(f"Loaded and prepared '{train_file.name}'.")
+        try:
+            df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
+            st.session_state.training_data = clean_and_feature_engineer(df_raw)
+            st.session_state.training_file_name = train_file.name
+            st.success(f"Loaded and prepared '{train_file.name}'.")
+        except Exception as e:
+            st.error(f"Error processing training file: {e}")
 
     st.header("2. Upload Prediction Data")
     predict_file = st.file_uploader("Upload the data you want to score", type=["xlsx", "csv"])
     if predict_file:
-        df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
-        st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
-        st.success(f"Loaded and prepared '{predict_file.name}'.")
+        try:
+            df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
+            st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
+            st.success(f"Loaded and prepared '{predict_file.name}'.")
+        except Exception as e:
+            st.error(f"Error processing prediction file: {e}")
 
     st.header("Analysis Status")
     model_status = "Yes" if st.session_state.trained_model else "No"
     trained_file_info = f" (on `{st.session_state.trained_on_file}`)" if st.session_state.trained_on_file else ""
     st.write(f"**Model Trained:** {model_status}{trained_file_info}")
 
-
+# --- Main chat interface ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
-        st.markdown(message["content"], unsafe_allow_html=True)
+        st.markdown(message["content"])
         if message.get("data") is not None:
             st.dataframe(message["data"])
         if message.get("chart") is not None:
             st.plotly_chart(message["chart"], use_container_width=True)
 
-if prompt := st.chat_input("What would you like to do?"):
+if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'plot exits by country')"):
     st.session_state.messages.append({"role": "user", "content": prompt, "data": None, "chart": None})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         response_content, response_data, response_chart = None, None, None
-
+        
         if st.session_state.training_data is None or st.session_state.prediction_data is None:
-            st.warning("Please upload both a training and a prediction file first.")
             response_content = "Please upload both a training and a prediction file first."
+            st.warning(response_content)
         else:
             with st.spinner("🧠 AI is thinking..."):
-                # --- FINAL FIX IS HERE: Pass df_dict to the AI response function ---
-                ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
-                
-                cleaned_response = ai_response.strip().strip('`')
+                model = get_ai_model()
+                # --- FIX #2: The function call now correctly passes only two arguments. ---
+                ai_response = get_ai_response(model, prompt)
+                cleaned_response = ai_response.strip().strip('`').strip()
 
                 code_keywords = ['fig =', 'train_and_score']
                 is_code = any(keyword in cleaned_response for keyword in code_keywords)
@@ -256,9 +268,9 @@ if prompt := st.chat_input("What would you like to do?"):
                 if cleaned_response.startswith("ERROR:"):
                     response_content = f"❌ {cleaned_response}"
                     st.error(response_content)
+                
                 elif is_code:
                     st.code(cleaned_response, language="python")
-                    # Determine which dataframe to use for the operation
                     df_for_exec = st.session_state.prediction_data if "plot" in prompt or "chart" in prompt else st.session_state.training_data
                     local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
                     
@@ -268,12 +280,13 @@ if prompt := st.chat_input("What would you like to do?"):
                         if local_vars.get("fig") is not None:
                             response_chart = local_vars["fig"]
                             response_content = f"✅ Here is your interactive chart for '{prompt}'"
-                        elif 'results_df' in local_vars:
-                            results_df, message = local_vars["results_df"], local_vars["message"]
-                            response_content = message
-                            response_data = results_df
+                        
+                        elif 'results_df' in local_vars and 'message' in local_vars:
+                            response_data = local_vars["results_df"]
+                            response_content = local_vars["message"]
+
                         else:
-                            response_content = "✅ Command executed." # Fallback message
+                            response_content = "✅ Command executed."
 
                         st.markdown(response_content)
                         if response_data is not None:
@@ -282,10 +295,10 @@ if prompt := st.chat_input("What would you like to do?"):
                             st.plotly_chart(response_chart, use_container_width=True)
 
                     except Exception as e:
-                        response_content = f"❌ Error executing code: {e}"
+                        response_content = f"❌ Error executing generated code: {e}"
                         st.error(response_content)
-                else: # It's a conversational response
+                else: 
                     response_content = cleaned_response
                     st.markdown(response_content)
-            
+        
         st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart})
