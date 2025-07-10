@@ -129,7 +129,6 @@ def clean_and_feature_engineer(df):
 
     exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '$': 1}
     
-    # --- FIX: Replaced with a more robust currency conversion function ---
     def convert_to_usd(value):
         """
         Robustly converts a string with currency symbols and multipliers (M, B) to USD.
@@ -169,7 +168,6 @@ def clean_and_feature_engineer(df):
         if col in df.columns:
             new_col_name = f"{col} (USD)"
             df[new_col_name] = df[col].apply(convert_to_usd)
-            # --- NEW: Fill NaNs with 0 to ensure plotting always works ---
             df[new_col_name] = df[new_col_name].fillna(0)
 
     if 'Exit' not in df.columns:
@@ -286,13 +284,15 @@ with st.sidebar:
     st.write(f"**Model Trained:** {model_status}{trained_file_info}")
 
 # --- Main chat interface ---
-for message in st.session_state.messages:
+# --- FIX: Use enumerate to get a unique index for the key ---
+for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message.get("data") is not None:
             st.dataframe(message["data"])
         if message.get("chart") is not None:
-            st.plotly_chart(message["chart"], use_container_width=True)
+            # --- FIX: Add a unique key to the chart element in the history loop ---
+            st.plotly_chart(message["chart"], use_container_width=True, key=f"history_chart_{i}")
 
 if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'plot exits by country')"):
     st.session_state.messages.append({"role": "user", "content": prompt, "data": None, "chart": None})
@@ -341,7 +341,8 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model', 'pl
                         if response_data is not None:
                             st.dataframe(response_data)
                         if response_chart is not None:
-                            st.plotly_chart(response_chart, use_container_width=True)
+                            # --- FIX: Add a unique key to the newly generated chart ---
+                            st.plotly_chart(response_chart, use_container_width=True, key="new_chart")
 
                     except Exception as e:
                         response_content = f"❌ Error executing generated code: {e}"
