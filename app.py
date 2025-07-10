@@ -245,7 +245,8 @@ if prompt := st.chat_input("What would you like to do?"):
             response_content = "Please upload both a training and a prediction file first."
         else:
             with st.spinner("🧠 AI is thinking..."):
-                ai_response = get_ai_response(model, prompt)
+                # --- FINAL FIX IS HERE: Pass df_dict to the AI response function ---
+                ai_response = get_ai_response(model, prompt, st.session_state.df_dict)
                 
                 cleaned_response = ai_response.strip().strip('`')
 
@@ -262,14 +263,12 @@ if prompt := st.chat_input("What would you like to do?"):
                     local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
                     
                     try:
-                        # --- ROBUST FIX: Use exec() for all code execution ---
                         exec(cleaned_response, globals(), local_vars)
                         
-                        # Check what was created by the exec command
                         if local_vars.get("fig") is not None:
                             response_chart = local_vars["fig"]
                             response_content = f"✅ Here is your interactive chart for '{prompt}'"
-                        elif local_vars.get("results_df") is not None:
+                        elif 'results_df' in local_vars:
                             results_df, message = local_vars["results_df"], local_vars["message"]
                             response_content = message
                             response_data = results_df
