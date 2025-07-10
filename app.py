@@ -43,23 +43,15 @@ def get_ai_response(model, prompt, df_dict):
     """
     if model is None: return "ERROR: AI model is not configured."
     
-    # --- RE-ARCHITECTED: Stricter System Prompt ---
     df_names = list(df_dict.keys())
-    # Determine the primary dataframe for providing column context to the AI
-    if 'prediction_data' in st.session_state and st.session_state.prediction_data is not None:
-        context_df = st.session_state.prediction_data
-    elif 'training_data' in st.session_state and st.session_state.training_data is not None:
-        context_df = st.session_state.training_data
-    else:
-        context_df = pd.DataFrame() # No data loaded
-    
+    context_df = st.session_state.get('prediction_data') or st.session_state.get('training_data') or pd.DataFrame()
     primary_df_columns = list(context_df.columns)
 
     system_prompt = f"""
     You are a helpful AI assistant. Your job is to determine the user's intent and respond in one of three modes.
 
     1.  **Visualizer Mode**: If the prompt contains "plot", "chart", "visualize", or "graph", you MUST generate a single line of Python code using `plotly.express as px` and assign it to a variable named `fig`.
-    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "train" or "predict", you MUST generate a single line of Python code to perform that action.
+    2.  **Data Analyst Mode**: If the prompt contains other data-related keywords like "filter", "sort", "train", or "predict", you MUST generate a single line of Python code to perform that action.
     3.  **Conversational Mode**: For any other question or greeting, provide a friendly, conversational text response.
 
     **Code Generation Rules:**
@@ -73,8 +65,6 @@ def get_ai_response(model, prompt, df_dict):
     **Plotting Examples:**
     - User: "plot a bar chart of the total 'Total Funding Amount (USD)' for each 'Last Funding Type'"
     - AI: `fig = px.bar(df.groupby('Last Funding Type')['Total Funding Amount (USD)'].sum().reset_index(), x='Last Funding Type', y='Total Funding Amount (USD)', title='Total Funding by Type')`
-    - User: "show a scatter plot of 'Total Funding Amount (USD)' vs 'Founded Year'"
-    - AI: `fig = px.scatter(df, x='Total Funding Amount (USD)', y='Founded Year', title='Funding vs. Founding Year')`
     
     **Training/Prediction Examples:**
     - User: "train the model"
@@ -255,7 +245,7 @@ if prompt := st.chat_input("What would you like to do?"):
             response_content = "Please upload both a training and a prediction file first."
         else:
             with st.spinner("🧠 AI is thinking..."):
-                ai_response = get_ai_response(model, prompt, st.session_state)
+                ai_response = get_ai_response(model, prompt)
                 
                 cleaned_response = ai_response.strip().strip('`')
 
@@ -272,18 +262,24 @@ if prompt := st.chat_input("What would you like to do?"):
                     local_vars = {"df": df_for_exec, "px": px, "train_and_score": train_and_score}
                     
                     try:
-                        result = eval(cleaned_response, globals(), local_vars)
+                        # --- ROBUST FIX: Use exec() for all code execution ---
+                        exec(cleaned_response, globals(), local_vars)
                         
-                        if isinstance(result, tuple) and len(result) == 2: # Prediction
-                            results_df, message = result
+                        # Check what was created by the exec command
+                        if local_vars.get("fig") is not None:
+                            response_chart = local_vars["fig"]
+                            response_content = f"✅ Here is your interactive chart for '{prompt}'"
+                        elif local_vars.get("results_df") is not None:
+                            results_df, message = local_vars["results_df"], local_vars["message"]
                             response_content = message
                             response_data = results_df
-                            st.markdown(response_content)
+                        else:
+                            response_content = "✅ Command executed." # Fallback message
+
+                        st.markdown(response_content)
+                        if response_data is not None:
                             st.dataframe(response_data)
-                        else: # Plotly fig
-                            response_chart = result
-                            response_content = f"✅ Here is your interactive chart for '{prompt}'"
-                            st.markdown(response_content)
+                        if response_chart is not None:
                             st.plotly_chart(response_chart, use_container_width=True)
 
                     except Exception as e:
