@@ -88,48 +88,91 @@ def get_column_mapping(_model, columns):
 
 # --- Data Processing and Modeling ---
 
-def clean_data(df):
-    """Performs essential, universal data cleaning, including robust currency conversion."""
+# --- FIX: Replaced with the full, robust cleaning pipeline from predictor.py ---
+def clean_and_feature_engineer(df):
+    """
+    Loads a dataframe and performs all cleaning and feature engineering from predictor.py.
+    """
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
 
-    # Robustly find and convert currency columns
-    exchange_rates = {
-        'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'SGD': 0.79, 
-        '₹': 0.012, 'INR': 0.012, 'IDR': 0.000062, 
-        '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14,
-        '€': 1.08, 'EUR': 1.08,
-        '$': 1.0, 'USD': 1.0,
-    }
-    
-    def convert_to_usd(value):
-        if pd.isna(value) or not isinstance(value, str): return np.nan
-        value_cleaned = value.strip().replace(',', '')
-        if value_cleaned in ['-', 'Undisclosed', '']: return np.nan
-        multiplier = 1.0
-        if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
-        elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
-        numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-        if not numeric_part_str: return np.nan
-        try: numeric_value = float(numeric_part_str)
-        except (ValueError, TypeError): return np.nan
-        rate = 1.0
-        for symbol, r in exchange_rates.items():
-            if symbol in value_cleaned:
-                rate = r
-                break
-        return numeric_value * multiplier * rate
-    
-    for col in df.columns:
-        if any(keyword in col.lower() for keyword in ['funding', 'amount', 'equity']):
-            if df[col].dtype == 'object':
-                new_col_name = f"{col} (USD)"
-                df[new_col_name] = df[col].apply(convert_to_usd)
+    # 1. Clean Headquarters Location -> Only Country
+    if 'Headquarters Location' in df.columns:
+        def get_country(location):
+            if isinstance(location, str):
+                return location.split(',')[-1].strip()
+            return 'Unknown'
+        df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
 
+    # 2. Create Top Industry from priority list
+    industry_priority = [
+        'AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT',
+        'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS',
+        'EdTech', 'Ecommerce', 'HRTech'
+    ]
+    industry_map = {
+        'Artificial Intelligence (AI)': 'AI', 'FinTech': 'Fintech', 'AgTech': 'F&B & AgriTech',
+        'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT',
+        'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech',
+        'PropTech': 'Proptech', 'Edutech': 'EdTech'
+    }
+    def get_top_industry(row):
+        combined_industries = f"{row.get('Industry Groups', '')} {row.get('Industries', '')}"
+        for industry in industry_priority:
+            if re.search(r'\b' + re.escape(industry) + r'\b', combined_industries, re.IGNORECASE):
+                return industry
+        for term, top_industry in industry_map.items():
+            if term in combined_industries:
+                return top_industry
+        return 'Other'
+    df['Top Industry'] = df.apply(get_top_industry, axis=1)
+
+    # 3. Clean Date Columns -> Year only
+    def get_year(date):
+        if isinstance(date, str):
+            match = re.search(r'\b\d{4}\b', date)
+            if match:
+                return match.group(0)
+        return pd.NA
+    if 'Founded Date' in df.columns:
+        df['Founded Year'] = df['Founded Date'].apply(get_year)
+    if 'Exit Date' in df.columns:
+        df['Exit Year'] = df['Exit Date'].apply(get_year)
+
+    # 4. Convert all monetary data to USD
+    exchange_rates = {
+        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
+        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
+        'CNY': 0.14, '$': 1, '€': 1.08, 'EUR': 1.08
+    }
+    def convert_to_usd(value):
+        if not isinstance(value, str): return pd.NA
+        value_cleaned = value.replace(',', '')
+        for symbol, rate in exchange_rates.items():
+            if symbol in value_cleaned:
+                numeric_part = re.search(r'[\d\.]+', value_cleaned)
+                if numeric_part:
+                    return float(numeric_part.group(0)) * rate
+        numeric_part = re.search(r'[\d\.]+', value_cleaned)
+        if numeric_part:
+            return float(numeric_part.group(0))
+        return pd.NA
+        
+    money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
+    for col in money_cols:
+        if col in df.columns:
+            new_col_name = f"{col} (USD)"
+            df[new_col_name] = df[col].apply(convert_to_usd)
+
+    # 5. Create the final 'Exit' column if it doesn't exist
+    if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
+        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or row['Funding Status'] in ['M&A', 'IPO'] else 0.0, axis=1)
+    
     return df
 
+
 def train_and_score():
-    """Dynamically trains the model and saves it to session state."""
+    """Trains the model using the pre-defined robust feature set."""
     df_train = st.session_state.training_data.copy()
     mapping = st.session_state.column_mapping
     target = mapping['TARGET_VARIABLE']
@@ -137,7 +180,7 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected."
 
-    # --- Use the robust, hardcoded logic from predictor.py ---
+    # Use the robust, hardcoded feature logic from predictor.py
     numeric_features = [
         'Founded Year', 'Number of Founders', 'Number of Funding Rounds',
         'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)'
@@ -147,24 +190,19 @@ def train_and_score():
     ]
     text_features = ['Description', 'Top 5 Investors']
 
-    # Pre-process columns to ensure correct data types, matching predictor.py
+    # Pre-process columns to ensure correct data types
     for col in numeric_features:
         if col in df_train.columns:
             df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
-        else: # Add column if it's missing
-            df_train[col] = np.nan
-
+        else: df_train[col] = np.nan
     for col in categorical_features:
         if col in df_train.columns:
             df_train[col] = df_train[col].astype(str).fillna('Unknown')
-        else:
-            df_train[col] = 'Unknown'
-            
+        else: df_train[col] = 'Unknown'
     for col in text_features:
         if col in df_train.columns:
             df_train[col] = df_train[col].astype(str).fillna('')
-        else:
-            df_train[col] = ''
+        else: df_train[col] = ''
 
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
@@ -186,22 +224,15 @@ def train_and_score():
     
     if st.session_state.prediction_data is not None:
         df_predict = st.session_state.prediction_data.copy()
-        # Apply the same data type conversions to prediction data
         for col in numeric_features:
-            if col in df_predict.columns:
-                df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
-            else:
-                df_predict[col] = np.nan
+            if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+            else: df_predict[col] = np.nan
         for col in categorical_features:
-             if col in df_predict.columns:
-                df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
-             else:
-                df_predict[col] = 'Unknown'
+             if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+             else: df_predict[col] = 'Unknown'
         for col in text_features:
-            if col in df_predict.columns:
-                df_predict[col] = df_predict[col].astype(str).fillna('')
-            else:
-                df_predict[col] = ''
+            if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
+            else: df_predict[col] = ''
 
         X_predict = df_predict.drop(columns=[target], errors='ignore')
         probabilities = model.predict_proba(X_predict)[:, 1]
@@ -218,29 +249,21 @@ def get_feature_importance_plot():
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
-    
     model = st.session_state.trained_model
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
-
     try:
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Could not get feature names from the model preprocessor: {e}")
         return None
-
     importances = classifier.feature_importances_
-
     if len(feature_names) != len(importances):
         st.error(f"Feature name count ({len(feature_names)}) does not match importance value count ({len(importances)}).")
         return None
-
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-    
     importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '').str.replace('cat__', '').str.replace(r'text_.*?__', '', regex=True)
-    
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
-
     fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h', title='Top 20 Drivers of Successful Exits')
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
@@ -286,16 +309,14 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
-        st.session_state.training_data = clean_data(df_raw)
-        st.success(f"Loaded '{train_file.name}'.")
+        st.session_state.training_data = clean_and_feature_engineer(df_raw)
+        st.success(f"Loaded and prepared '{train_file.name}'.")
 
-        # --- FIX: Automatically map columns without user confirmation ---
         with st.spinner("🤖 AI is analyzing your columns..."):
             model = get_ai_model()
             all_cols = st.session_state.training_data.columns.tolist()
             st.session_state.column_mapping = get_column_mapping(model, all_cols)
         
-        # Display the AI's mapping for transparency
         st.subheader("AI Column Role Analysis")
         st.json(st.session_state.column_mapping)
 
@@ -303,7 +324,7 @@ with st.sidebar:
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
     if predict_file:
         df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
-        st.session_state.prediction_data = clean_data(df_raw)
+        st.session_state.prediction_data = clean_and_feature_engineer(df_raw)
         st.success(f"Loaded '{predict_file.name}'.")
 
 # --- Main chat interface ---
