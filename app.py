@@ -89,9 +89,43 @@ def get_column_mapping(_model, columns):
 # --- Data Processing and Modeling ---
 
 def clean_data(df):
-    """Performs essential, universal data cleaning."""
+    """Performs essential, universal data cleaning, including robust currency conversion."""
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
+
+    # Robustly find and convert currency columns
+    exchange_rates = {
+        'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'SGD': 0.79, 
+        '₹': 0.012, 'INR': 0.012, 'IDR': 0.000062, 
+        '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14,
+        '€': 1.08, 'EUR': 1.08,
+        '$': 1.0, 'USD': 1.0,
+    }
+    
+    def convert_to_usd(value):
+        if pd.isna(value) or not isinstance(value, str): return np.nan
+        value_cleaned = value.strip().replace(',', '')
+        if value_cleaned in ['-', 'Undisclosed', '']: return np.nan
+        multiplier = 1.0
+        if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
+        elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
+        numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
+        if not numeric_part_str: return np.nan
+        try: numeric_value = float(numeric_part_str)
+        except (ValueError, TypeError): return np.nan
+        rate = 1.0
+        for symbol, r in exchange_rates.items():
+            if symbol in value_cleaned:
+                rate = r
+                break
+        return numeric_value * multiplier * rate
+    
+    for col in df.columns:
+        if any(keyword in col.lower() for keyword in ['funding', 'amount', 'equity']):
+            if df[col].dtype == 'object':
+                new_col_name = f"{col} (USD)"
+                df[new_col_name] = df[col].apply(convert_to_usd)
+
     return df
 
 def train_and_score():
@@ -103,27 +137,34 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected."
 
-    # --- FIX: More robust feature type identification ---
-    special_cols = list(mapping.values())
+    # --- FIX: Replaced dynamic feature detection with the robust, hardcoded logic from predictor.py ---
+    numeric_features = [
+        'Founded Year', 'Number of Founders', 'Number of Funding Rounds',
+        'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)'
+    ]
+    categorical_features = [
+        'Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type'
+    ]
+    text_features = ['Description', 'Top 5 Investors']
 
-    # Identify numeric features directly from dtypes
-    numeric_features = df_train.select_dtypes(include=np.number).columns.drop(target, errors='ignore').tolist()
+    # Pre-process columns to ensure correct data types, matching predictor.py
+    for col in numeric_features:
+        if col in df_train.columns:
+            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+        else: # Add column if it's missing
+            df_train[col] = np.nan
 
-    # Identify object/categorical columns
-    object_cols = df_train.select_dtypes(include=['object', 'category']).columns.tolist()
-
-    # The main text feature is explicitly mapped
-    text_features = [mapping['TEXT_DESCRIPTION']] if mapping['TEXT_DESCRIPTION'] != "N/A" and mapping['TEXT_DESCRIPTION'] in object_cols else []
-
-    # Categorical features are object columns that are not special roles
-    categorical_features = [c for c in object_cols if c not in special_cols and c not in text_features]
-
-    # Clean up data within the identified feature sets before passing to pipeline
     for col in categorical_features:
-        df_train[col] = df_train[col].astype(str).fillna('Unknown')
+        if col in df_train.columns:
+            df_train[col] = df_train[col].astype(str).fillna('Unknown')
+        else:
+            df_train[col] = 'Unknown'
+            
     for col in text_features:
-        df_train[col] = df_train[col].astype(str).fillna('')
-    # For numeric features, the imputer in the pipeline will handle NaNs.
+        if col in df_train.columns:
+            df_train[col] = df_train[col].astype(str).fillna('')
+        else:
+            df_train[col] = ''
 
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
@@ -145,18 +186,27 @@ def train_and_score():
     
     if st.session_state.prediction_data is not None:
         df_predict = st.session_state.prediction_data.copy()
-        # Ensure categorical and text columns in prediction data are strings
+        # Apply the same data type conversions to prediction data
+        for col in numeric_features:
+            if col in df_predict.columns:
+                df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+            else:
+                df_predict[col] = np.nan
         for col in categorical_features:
              if col in df_predict.columns:
                 df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+             else:
+                df_predict[col] = 'Unknown'
         for col in text_features:
             if col in df_predict.columns:
                 df_predict[col] = df_predict[col].astype(str).fillna('')
+            else:
+                df_predict[col] = ''
 
         X_predict = df_predict.drop(columns=[target], errors='ignore')
         probabilities = model.predict_proba(X_predict)[:, 1]
         org_name_col = mapping['ORGANIZATION_IDENTIFIER']
-        results_df = pd.DataFrame({'Organization Name': df_predict[org_name_col] if org_name_col != "N/A" else df_predict.index, 'Success Score': (probabilities * 100).round().astype(int)}).sort_values(by='Success Score', ascending=False)
+        results_df = pd.DataFrame({'Organization Name': df_predict[org_name_col] if org_name_col != "N/A" and org_name_col in df_predict.columns else df_predict.index, 'Success Score': (probabilities * 100).round().astype(int)}).sort_values(by='Success Score', ascending=False)
         return results_df, message
     else:
         return None, message
@@ -226,6 +276,7 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
+        # Run both cleaning steps
         st.session_state.training_data = clean_data(df_raw)
         st.success(f"Loaded '{train_file.name}'.")
 
