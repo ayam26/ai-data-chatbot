@@ -172,6 +172,9 @@ def clean_and_feature_engineer(df):
         if col in df.columns:
             new_col_name = f"{col} (USD)"
             df[new_col_name] = df[col].apply(convert_to_usd)
+            # Fill any remaining NaNs with 0 to ensure plots are not empty
+            df[new_col_name] = df[new_col_name].fillna(0)
+
 
     # 5. Create the final 'Exit' column if it doesn't exist
     if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
@@ -333,6 +336,8 @@ with st.sidebar:
             st.dataframe(st.session_state.training_data.dtypes.astype(str))
             st.write("**Missing Values Count:**")
             st.dataframe(st.session_state.training_data.isnull().sum())
+            st.write("**Data Preview:**")
+            st.dataframe(st.session_state.training_data.head())
         
         st.subheader("AI Column Role Analysis")
         st.json(st.session_state.column_mapping)
