@@ -191,11 +191,17 @@ def full_data_prep(df):
 def train_and_score():
     """Trains the model using the pre-defined robust feature set."""
     df_train = st.session_state.training_data.copy()
+    
+    # --- FIX: Get column mapping inside the function to ensure it's up to date ---
+    if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
+        model = get_ai_model()
+        st.session_state.column_mapping = get_column_mapping(model, df_train.columns.tolist())
+
     mapping = st.session_state.column_mapping
     target = mapping['TARGET_VARIABLE']
 
     if target == "N/A" or target not in df_train.columns:
-        return None, "ERROR: A valid 'Target Variable' must be selected."
+        return None, "ERROR: A valid 'Target Variable' must be identified or selected."
 
     # Use the robust, hardcoded feature logic from predictor.py
     numeric_features = [
@@ -297,6 +303,10 @@ def plot_correlation_heatmap():
 def plot_comparison_boxplot(y_col):
     """Compares the distribution of a numeric column for exited vs. non-exited companies."""
     df = st.session_state.training_data
+    # --- FIX: Ensure the target column is correctly identified before plotting ---
+    if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
+        st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
+        return None
     target = st.session_state.column_mapping['TARGET_VARIABLE']
     fig = px.box(df, x=target, y=y_col, title=f'Comparison of {y_col} for Exited vs. Non-Exited Companies')
     return fig
@@ -304,6 +314,9 @@ def plot_comparison_boxplot(y_col):
 def plot_interactive_scatter(x_col, y_col):
     """Creates a scatter plot to show the interaction between two variables, colored by exit type."""
     df = st.session_state.training_data
+    if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
+        st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
+        return None
     target = st.session_state.column_mapping['TARGET_VARIABLE']
     fig = px.scatter(df, x=x_col, y=y_col, color=target, title=f'Interaction between {x_col} and {y_col}')
     return fig
