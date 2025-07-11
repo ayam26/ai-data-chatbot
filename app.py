@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: Upgraded with Advanced Analysis ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in one of six modes.
 
@@ -104,12 +103,26 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected."
 
+    # --- FIX: More robust feature type identification ---
     special_cols = list(mapping.values())
+    
+    # Attempt to convert object columns to numeric where possible
+    for col in df_train.columns:
+        if col in special_cols or col == target:
+            continue
+        if df_train[col].dtype == 'object':
+            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+
+    # Now, identify types based on the cleaned dtypes
     numeric_features = df_train.select_dtypes(include=np.number).columns.drop(target, errors='ignore').tolist()
     object_cols = df_train.select_dtypes(include=['object', 'category']).columns.tolist()
     categorical_features = [c for c in object_cols if c not in special_cols]
     text_features = [mapping['TEXT_DESCRIPTION']] if mapping['TEXT_DESCRIPTION'] != "N/A" and mapping['TEXT_DESCRIPTION'] in df_train.columns else []
     
+    # Ensure categorical columns are uniformly strings to prevent encoder errors
+    for col in categorical_features:
+        df_train[col] = df_train[col].astype(str).fillna('Unknown')
+
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
@@ -130,6 +143,14 @@ def train_and_score():
     
     if st.session_state.prediction_data is not None:
         df_predict = st.session_state.prediction_data.copy()
+        # Apply the same data type conversions to prediction data
+        for col in df_predict.columns:
+            if df_predict[col].dtype == 'object':
+                df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+        for col in categorical_features:
+             if col in df_predict.columns:
+                df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+
         X_predict = df_predict.drop(columns=[target], errors='ignore')
         probabilities = model.predict_proba(X_predict)[:, 1]
         org_name_col = mapping['ORGANIZATION_IDENTIFIER']
@@ -248,7 +269,6 @@ if prompt := st.chat_input("What would you like to do?"):
             context_df = st.session_state.training_data # Most analysis is on training data
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
             
-            # --- FIX: More robust cleaning to handle markdown code blocks ---
             cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
 
             code_keywords = ['fig =', 'train_and_score', 'df =']
@@ -259,7 +279,6 @@ if prompt := st.chat_input("What would you like to do?"):
                 st.session_state.messages.append({"role": "assistant", "content": cleaned_response})
             elif is_code:
                 st.code(cleaned_response, language="python")
-                # --- NEW: Added all advanced analysis functions to the execution scope ---
                 local_vars = {
                     "df": context_df.copy(), "px": px, "go": go,
                     "train_and_score": train_and_score, 
