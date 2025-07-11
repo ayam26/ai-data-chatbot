@@ -40,31 +40,24 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: System prompt now includes specific data cleaning commands ---
     system_prompt = f"""
-    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
+    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in one of six modes.
 
-    **Data Cleaning & Feature Engineering:**
-    - If the prompt is to "clean the data" or "prepare data", call `df = full_data_prep(df)`.
-
-    **Modeling & Analysis:**
-    - To "train model" or "predict", generate `results_df, message = train_and_score()`.
-    - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
-    - To "show correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
-    - To "compare means" or "compare distributions", call `fig = plot_comparison_boxplot(y_col='column_name')`, extracting the column name.
-    - To see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`, extracting the two column names.
-
-    **Conversational Mode:**
-    - For anything else, provide a friendly text response.
+    1.  **Correlation Heatmap Mode**: If the prompt asks for "correlation" or "heatmap", call `plot_correlation_heatmap()`.
+    2.  **Comparison Mode**: If the prompt asks to "compare means" or "compare distributions" for exited vs. non-exited companies, call `plot_comparison_boxplot(y_col='column_name')`, extracting the column name to compare.
+    3.  **Interaction Scatter Mode**: If the prompt asks to see the "interaction between" two variables, call `plot_interactive_scatter(x_col='col1', y_col='col2')`, extracting the two column names.
+    4.  **Training Mode**: If the prompt is to "train" or "predict", generate `results_df, message = train_and_score()`.
+    5.  **Driver Analysis Mode**: If the prompt asks to "explain the model" or "find drivers", generate `fig = get_feature_importance_plot()`.
+    6.  **Conversational Mode**: For anything else, provide a friendly text response.
 
     **Rules:**
     - The output MUST be a single line of Python code, or a conversational response.
     - Use the exact column names provided: `{df_columns}`.
-    - The dataframe is ALWAYS named `df`.
 
-    **Examples:**
-    - User: "ok prepare the data for me" -> AI: `df = full_data_prep(df)`
+    **Advanced Analysis Examples:**
+    - User: "Show me the correlation heatmap of financial metrics." -> AI: `fig = plot_correlation_heatmap()`
     - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    - User: "Plot the interaction between Founded Year and Total Funding." -> AI: `fig = plot_interactive_scatter(x_col='Founded Year', y_col='Total Funding Amount (USD)')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -95,7 +88,6 @@ def get_column_mapping(_model, columns):
 
 # --- Data Processing and Modeling ---
 
-# --- FIX: Replaced with a more robust cleaning pipeline that handles M/B multipliers ---
 def full_data_prep(df):
     """
     Loads a dataframe and performs all cleaning and feature engineering.
@@ -192,7 +184,6 @@ def train_and_score():
     """Trains the model using the pre-defined robust feature set."""
     df_train = st.session_state.training_data.copy()
     
-    # --- FIX: Get column mapping inside the function to ensure it's up to date ---
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
         model = get_ai_model()
         st.session_state.column_mapping = get_column_mapping(model, df_train.columns.tolist())
@@ -303,7 +294,6 @@ def plot_correlation_heatmap():
 def plot_comparison_boxplot(y_col):
     """Compares the distribution of a numeric column for exited vs. non-exited companies."""
     df = st.session_state.training_data
-    # --- FIX: Ensure the target column is correctly identified before plotting ---
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
         st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
         return None
@@ -379,7 +369,10 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'prepare the data'
             context_df = st.session_state.training_data
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
             
+            # --- FIX: More robust cleaning to handle markdown and special quotes ---
             cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
+            cleaned_response = cleaned_response.replace("`", "") # Remove all backticks
+            cleaned_response = cleaned_response.replace("‘", "'").replace("’", "'") # Replace smart quotes
 
             code_keywords = ['fig =', 'train_and_score', 'df =']
             is_code = any(keyword in cleaned_response for keyword in code_keywords)
@@ -408,7 +401,6 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'prepare the data'
                         response_content = f"✅ Here is your analysis for '{prompt}'"
                     elif 'results_df' in local_vars:
                         response_data, response_content = local_vars["results_df"], local_vars["message"]
-                    # --- NEW: Handle data cleaning updates ---
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
                         st.session_state.training_data = local_vars['df']
                         response_content = "✅ Data cleaning successful! The data has been updated."
