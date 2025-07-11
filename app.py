@@ -247,7 +247,9 @@ if prompt := st.chat_input("What would you like to do?"):
             model = get_ai_model()
             context_df = st.session_state.training_data # Most analysis is on training data
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
-            cleaned_response = ai_response.strip().strip('`').strip()
+            
+            # --- FIX: More robust cleaning to handle markdown code blocks ---
+            cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
 
             code_keywords = ['fig =', 'train_and_score', 'df =']
             is_code = any(keyword in cleaned_response for keyword in code_keywords)
