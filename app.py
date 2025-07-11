@@ -88,10 +88,10 @@ def get_column_mapping(_model, columns):
 
 # --- Data Processing and Modeling ---
 
-# --- FIX: Replaced with the full, robust cleaning pipeline from predictor.py ---
+# --- FIX: Replaced with a more robust cleaning pipeline that handles M/B multipliers ---
 def clean_and_feature_engineer(df):
     """
-    Loads a dataframe and performs all cleaning and feature engineering from predictor.py.
+    Loads a dataframe and performs all cleaning and feature engineering.
     """
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
@@ -99,8 +99,7 @@ def clean_and_feature_engineer(df):
     # 1. Clean Headquarters Location -> Only Country
     if 'Headquarters Location' in df.columns:
         def get_country(location):
-            if isinstance(location, str):
-                return location.split(',')[-1].strip()
+            if isinstance(location, str): return location.split(',')[-1].strip()
             return 'Unknown'
         df['Headquarters Country'] = df['Headquarters Location'].apply(get_country)
 
@@ -131,8 +130,7 @@ def clean_and_feature_engineer(df):
     def get_year(date):
         if isinstance(date, str):
             match = re.search(r'\b\d{4}\b', date)
-            if match:
-                return match.group(0)
+            if match: return match.group(0)
         return pd.NA
     if 'Founded Date' in df.columns:
         df['Founded Year'] = df['Founded Date'].apply(get_year)
@@ -146,17 +144,28 @@ def clean_and_feature_engineer(df):
         'CNY': 0.14, '$': 1, '€': 1.08, 'EUR': 1.08
     }
     def convert_to_usd(value):
-        if not isinstance(value, str): return pd.NA
-        value_cleaned = value.replace(',', '')
-        for symbol, rate in exchange_rates.items():
+        if pd.isna(value) or not isinstance(value, str): return np.nan
+        value_cleaned = value.strip().replace(',', '')
+        if value_cleaned in ['-', 'Undisclosed', '']: return np.nan
+        
+        multiplier = 1.0
+        if 'B' in value_cleaned.upper():
+            multiplier = 1_000_000_000
+        elif 'M' in value_cleaned.upper():
+            multiplier = 1_000_000
+        
+        numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
+        if not numeric_part_str: return np.nan
+        
+        try: numeric_value = float(numeric_part_str)
+        except (ValueError, TypeError): return np.nan
+        
+        rate = 1.0
+        for symbol, r in exchange_rates.items():
             if symbol in value_cleaned:
-                numeric_part = re.search(r'[\d\.]+', value_cleaned)
-                if numeric_part:
-                    return float(numeric_part.group(0)) * rate
-        numeric_part = re.search(r'[\d\.]+', value_cleaned)
-        if numeric_part:
-            return float(numeric_part.group(0))
-        return pd.NA
+                rate = r
+                break
+        return numeric_value * multiplier * rate
         
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
