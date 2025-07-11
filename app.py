@@ -326,6 +326,14 @@ with st.sidebar:
             all_cols = st.session_state.training_data.columns.tolist()
             st.session_state.column_mapping = get_column_mapping(model, all_cols)
         
+        # --- NEW: Data Health Check Dashboard ---
+        st.subheader("Data Health Check")
+        with st.expander("View Data Types and Missing Values"):
+            st.write("**Data Types after Cleaning:**")
+            st.dataframe(st.session_state.training_data.dtypes.astype(str))
+            st.write("**Missing Values Count:**")
+            st.dataframe(st.session_state.training_data.isnull().sum())
+        
         st.subheader("AI Column Role Analysis")
         st.json(st.session_state.column_mapping)
 
