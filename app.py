@@ -137,7 +137,7 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected."
 
-    # --- FIX: Replaced dynamic feature detection with the robust, hardcoded logic from predictor.py ---
+    # --- Use the robust, hardcoded logic from predictor.py ---
     numeric_features = [
         'Founded Year', 'Number of Founders', 'Number of Funding Rounds',
         'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)'
@@ -218,19 +218,31 @@ def get_feature_importance_plot():
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
-    model, features = st.session_state.trained_model, st.session_state.model_features
-    preprocessor, classifier = model.named_steps['preprocessor'], model.named_steps['classifier']
     
-    try: onehot_cols = preprocessor.named_transformers_['cat'].named_steps['onehot'].get_feature_names_out(features['categorical'])
-    except: onehot_cols = []
-    text_cols = []
-    for col_name in features['text']:
-        try: text_cols.extend(preprocessor.named_transformers_[f'text_{col_name}'].named_steps['tfidf'].get_feature_names_out())
-        except: continue
-    
-    feature_names = np.concatenate([features['numeric'], onehot_cols, text_cols])
+    model = st.session_state.trained_model
+    preprocessor = model.named_steps['preprocessor']
+    classifier = model.named_steps['classifier']
+
+    # --- FIX: Get feature names directly from the fitted preprocessor ---
+    try:
+        feature_names = preprocessor.get_feature_names_out()
+    except Exception as e:
+        st.error(f"Could not get feature names from the model preprocessor: {e}")
+        return None
+
     importances = classifier.feature_importances_
-    importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances}).sort_values(by='Importance', ascending=False).head(20)
+
+    if len(feature_names) != len(importances):
+        st.error(f"Feature name count ({len(feature_names)}) does not match importance value count ({len(importances)}).")
+        return None
+
+    importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+    
+    # Clean up feature names for better readability
+    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '').str.replace('cat__', '').str.replace(r'text_.*?__', '', regex=True)
+    
+    importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
+
     fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h', title='Top 20 Drivers of Successful Exits')
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
