@@ -223,7 +223,6 @@ def get_feature_importance_plot():
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
 
-    # --- FIX: Get feature names directly from the fitted preprocessor ---
     try:
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
@@ -238,7 +237,6 @@ def get_feature_importance_plot():
 
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
     
-    # Clean up feature names for better readability
     importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '').str.replace('cat__', '').str.replace(r'text_.*?__', '', regex=True)
     
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
@@ -273,8 +271,8 @@ def plot_interactive_scatter(x_col, y_col):
 # --- Streamlit App UI and Logic ---
 
 st.set_page_config(layout="wide")
-st.title("🚀 Highly Adaptable AI Exit Predictor")
-st.caption("With AI-powered column mapping and advanced driver analysis.")
+st.title("🚀 Autonomous AI Exit Predictor")
+st.caption("With fully automatic column mapping and advanced driver analysis.")
 
 # Initialize session state
 if "messages" not in st.session_state: st.session_state.messages = []
@@ -288,29 +286,25 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
-        # Run both cleaning steps
         st.session_state.training_data = clean_data(df_raw)
         st.success(f"Loaded '{train_file.name}'.")
+
+        # --- FIX: Automatically map columns without user confirmation ---
+        with st.spinner("🤖 AI is analyzing your columns..."):
+            model = get_ai_model()
+            all_cols = st.session_state.training_data.columns.tolist()
+            st.session_state.column_mapping = get_column_mapping(model, all_cols)
+        
+        # Display the AI's mapping for transparency
+        st.subheader("AI Column Role Analysis")
+        st.json(st.session_state.column_mapping)
+
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
     if predict_file:
         df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
         st.session_state.prediction_data = clean_data(df_raw)
         st.success(f"Loaded '{predict_file.name}'.")
-
-    if st.session_state.training_data is not None:
-        st.header("2. Confirm Column Roles")
-        st.info("Our AI suggests roles for your columns. Please confirm or correct them.")
-        all_cols = ["N/A"] + st.session_state.training_data.columns.tolist()
-        if st.session_state.column_mapping is None:
-            model = get_ai_model()
-            st.session_state.column_mapping = get_column_mapping(model, all_cols[1:])
-        mapping = st.session_state.column_mapping
-        def get_index(key): return all_cols.index(mapping.get(key, "N/A")) if mapping.get(key) in all_cols else 0
-        mapping['TARGET_VARIABLE'] = st.selectbox("Target Variable", all_cols, index=get_index('TARGET_VARIABLE'))
-        mapping['ORGANIZATION_IDENTIFIER'] = st.selectbox("Organization Identifier", all_cols, index=get_index('ORGANIZATION_IDENTIFIER'))
-        mapping['TEXT_DESCRIPTION'] = st.selectbox("Text Description", all_cols, index=get_index('TEXT_DESCRIPTION'))
-        mapping['CATEGORICAL_INDUSTRY'] = st.selectbox("Categorical Industry", all_cols, index=get_index('CATEGORICAL_INDUSTRY'))
 
 # --- Main chat interface ---
 for i, message in enumerate(st.session_state.messages):
