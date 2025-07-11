@@ -105,23 +105,25 @@ def train_and_score():
 
     # --- FIX: More robust feature type identification ---
     special_cols = list(mapping.values())
-    
-    # Attempt to convert object columns to numeric where possible
-    for col in df_train.columns:
-        if col in special_cols or col == target:
-            continue
-        if df_train[col].dtype == 'object':
-            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
 
-    # Now, identify types based on the cleaned dtypes
+    # Identify numeric features directly from dtypes
     numeric_features = df_train.select_dtypes(include=np.number).columns.drop(target, errors='ignore').tolist()
+
+    # Identify object/categorical columns
     object_cols = df_train.select_dtypes(include=['object', 'category']).columns.tolist()
-    categorical_features = [c for c in object_cols if c not in special_cols]
-    text_features = [mapping['TEXT_DESCRIPTION']] if mapping['TEXT_DESCRIPTION'] != "N/A" and mapping['TEXT_DESCRIPTION'] in df_train.columns else []
-    
-    # Ensure categorical columns are uniformly strings to prevent encoder errors
+
+    # The main text feature is explicitly mapped
+    text_features = [mapping['TEXT_DESCRIPTION']] if mapping['TEXT_DESCRIPTION'] != "N/A" and mapping['TEXT_DESCRIPTION'] in object_cols else []
+
+    # Categorical features are object columns that are not special roles
+    categorical_features = [c for c in object_cols if c not in special_cols and c not in text_features]
+
+    # Clean up data within the identified feature sets before passing to pipeline
     for col in categorical_features:
         df_train[col] = df_train[col].astype(str).fillna('Unknown')
+    for col in text_features:
+        df_train[col] = df_train[col].astype(str).fillna('')
+    # For numeric features, the imputer in the pipeline will handle NaNs.
 
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
@@ -143,13 +145,13 @@ def train_and_score():
     
     if st.session_state.prediction_data is not None:
         df_predict = st.session_state.prediction_data.copy()
-        # Apply the same data type conversions to prediction data
-        for col in df_predict.columns:
-            if df_predict[col].dtype == 'object':
-                df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+        # Ensure categorical and text columns in prediction data are strings
         for col in categorical_features:
              if col in df_predict.columns:
                 df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+        for col in text_features:
+            if col in df_predict.columns:
+                df_predict[col] = df_predict[col].astype(str).fillna('')
 
         X_predict = df_predict.drop(columns=[target], errors='ignore')
         probabilities = model.predict_proba(X_predict)[:, 1]
