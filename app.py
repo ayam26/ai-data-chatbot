@@ -90,44 +90,53 @@ def get_column_mapping(_model, columns):
 
 
 # --- Data Processing and Modeling ---
-# --- FIX: Completely rewritten currency conversion function for robustness ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
-    if pd.isna(value): return np.nan
-    if isinstance(value, (int, float)): return float(value)
-    if not isinstance(value, str): return np.nan
+    if pd.isna(value):
+        return np.nan
+    
+    if isinstance(value, (int, float)):
+        return float(value)
 
-    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0}
+    if not isinstance(value, str):
+        return np.nan
+
+    exchange_rates = {
+        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
+        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
+        'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0
+    }
     
     value_cleaned = value.strip().replace(',', '')
     
-    if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
+    if value_cleaned in ['-', '—', 'Undisclosed']:
+        return np.nan
     
-    # Handle ranges by taking the lower bound
-    if ' to ' in value_cleaned.lower():
-        value_cleaned = value_cleaned.lower().split(' to ')[0].strip()
-    elif '-' in value_cleaned and not value_cleaned.startswith('-'):
+    if '-' in value_cleaned:
         value_cleaned = value_cleaned.split('-')[0].strip()
 
-    # Determine the rate first, before removing symbols
+    multiplier = 1.0
+    if 'B' in value_cleaned.upper():
+        multiplier = 1_000_000_000
+    elif 'M' in value_cleaned.upper():
+        multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper():
+        multiplier = 1_000
+    
+    numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
+    if not numeric_part_str:
+        return np.nan
+    
+    try:
+        numeric_value = float(numeric_part_str)
+    except (ValueError, TypeError):
+        return np.nan
+    
     rate = 1.0
     for symbol, r in exchange_rates.items():
-        if symbol in value_cleaned:
+        if symbol != '$' and symbol in value_cleaned:
             rate = r
             break
-    
-    # Determine the multiplier
-    multiplier = 1.0
-    if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
-    elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
-    elif 'K' in value_cleaned.upper(): multiplier = 1_000
-    
-    # Extract only the number
-    numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-    if not numeric_part_str: return np.nan
-    
-    try: numeric_value = float(numeric_part_str)
-    except (ValueError, TypeError): return np.nan
     
     return numeric_value * multiplier * rate
 
@@ -355,6 +364,28 @@ with st.sidebar:
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
 # --- Main chat interface ---
+# --- FIX: Added welcome message for new users ---
+if not st.session_state.messages:
+    st.info(
+        """
+        **Welcome to the Autonomous AI Exit Predictor!**
+
+        To get started, upload your training data in the sidebar. Once your data is automatically prepared, you can use the following prompts to analyze it:
+
+        - **To train the predictive model:**
+          - `train model`
+
+        - **To understand what drives success:**
+          - `what are the main drivers of success?`
+          - `show me the correlation heatmap`
+          - `compare the means for Total Funding Amount (USD)`
+          - `plot the interaction between Founded Year and Total Funding Amount (USD)`
+
+        Just type your command in the chat box below!
+        """
+    )
+
+
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
