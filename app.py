@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- FIX: Reverted to using '(USD)' suffixed columns for clarity ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -116,11 +115,14 @@ def convert_to_usd(value):
     if '-' in value_cleaned:
         value_cleaned = value_cleaned.split('-')[0].strip()
 
+    # --- FIX: Added 'K' for thousands to the multiplier logic ---
     multiplier = 1.0
     if 'B' in value_cleaned.upper():
         multiplier = 1_000_000_000
     elif 'M' in value_cleaned.upper():
         multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper():
+        multiplier = 1_000
     
     numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
     if not numeric_part_str:
@@ -175,7 +177,6 @@ def full_data_prep(df):
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
         if col in df.columns:
-            # --- FIX: Create new '(USD)' columns instead of overwriting ---
             new_col_name = f"{col} (USD)"
             df[new_col_name] = df[col].apply(convert_to_usd)
             df[new_col_name] = df[new_col_name].fillna(0)
@@ -200,7 +201,6 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be identified or selected."
 
-    # --- FIX: Updated numeric features list to use '(USD)' suffix ---
     numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
@@ -294,7 +294,6 @@ def plot_comparison_boxplot(y_col):
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
         st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
         return None
-    # --- FIX: Add a check to ensure the requested column exists ---
     if y_col not in df.columns:
         st.error(f"Column '{y_col}' not found in the data. Available numeric columns: {df.select_dtypes(include=np.number).columns.tolist()}")
         return None
@@ -308,7 +307,6 @@ def plot_interactive_scatter(x_col, y_col):
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
         st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
         return None
-    # --- FIX: Add checks to ensure both columns exist ---
     if x_col not in df.columns or y_col not in df.columns:
         st.error(f"One or both columns ('{x_col}', '{y_col}') not found in the data. Please check available columns.")
         return None
