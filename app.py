@@ -163,18 +163,12 @@ def full_data_prep(df):
         return 'Other'
     df['Top Industry'] = df.apply(get_top_industry, axis=1)
 
+    # --- FIX: Use robust pd.to_datetime for date parsing ---
     # 3. Clean Date Columns
-    def get_year(date):
-        if isinstance(date, str):
-            match = re.search(r'\b\d{4}\b', date)
-            if match: return match.group(0)
-        return pd.NA
     if 'Founded Date' in df.columns:
-        df['Founded Year'] = df['Founded Date'].apply(get_year)
-        df['Founded Year'] = pd.to_numeric(df['Founded Year'], errors='coerce')
+        df['Founded Year'] = pd.to_datetime(df['Founded Date'], errors='coerce').dt.year
     if 'Exit Date' in df.columns:
-        df['Exit Year'] = df['Exit Date'].apply(get_year)
-        df['Exit Year'] = pd.to_numeric(df['Exit Year'], errors='coerce')
+        df['Exit Year'] = pd.to_datetime(df['Exit Date'], errors='coerce').dt.year
 
     # 4. Convert all monetary data to USD
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
@@ -309,17 +303,6 @@ def plot_comparison_boxplot(y_col):
         st.error(f"Column '{y_col}' not found in the data. Available numeric columns: {df.select_dtypes(include=np.number).columns.tolist()}")
         return None
     target = st.session_state.column_mapping['TARGET_VARIABLE']
-    
-    # --- NEW: Debugging Step ---
-    st.subheader("Debug Info: Column Statistics")
-    st.write(f"Statistics for column '{y_col}':")
-    st.dataframe(df[y_col].describe())
-
-    if df[y_col].sum() == 0:
-        st.error(f"Plotting failed because all values in the '{y_col}' column are zero. The data cleaning step may have failed.")
-        return None
-    # --- End Debugging Step ---
-
     fig = px.box(df, x=target, y=y_col, title=f'Comparison of {y_col} for Exited vs. Non-Exited Companies')
     return fig
 
@@ -332,19 +315,6 @@ def plot_interactive_scatter(x_col, y_col):
     if x_col not in df.columns or y_col not in df.columns:
         st.error(f"One or both columns ('{x_col}', '{y_col}') not found in the data. Please check available columns.")
         return None
-    
-    # --- NEW: Debugging Step ---
-    st.subheader("Debug Info: Column Statistics")
-    st.write(f"Statistics for column '{x_col}':")
-    st.dataframe(df[x_col].describe())
-    st.write(f"Statistics for column '{y_col}':")
-    st.dataframe(df[y_col].describe())
-
-    if df[x_col].sum() == 0 or df[y_col].sum() == 0:
-        st.error(f"Plotting failed because all values in one or both columns are zero. The data cleaning step may have failed.")
-        return None
-    # --- End Debugging Step ---
-
     target = st.session_state.column_mapping['TARGET_VARIABLE']
     fig = px.scatter(df, x=x_col, y=y_col, color=target, title=f'Interaction between {x_col} and {y_col}')
     return fig
