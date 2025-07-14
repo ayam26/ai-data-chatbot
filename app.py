@@ -74,11 +74,19 @@ def get_ai_response(model, prompt, df_columns):
         return f"ERROR: AI generation failed: {e}"
 
 # --- Data Processing and Modeling ---
+# --- FIX: Upgraded currency conversion function to handle ranges and raw numbers ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
-    if pd.isna(value) or not isinstance(value, str):
+    if pd.isna(value):
         return np.nan
     
+    # If the value is already a number, just return it
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    if not isinstance(value, str):
+        return np.nan
+
     exchange_rates = {
         '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
         'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
@@ -86,7 +94,12 @@ def convert_to_usd(value):
     }
     
     value_cleaned = value.strip().replace(',', '')
-    if value_cleaned in ['-', 'Undisclosed', '']:
+    
+    # Handle ranges by taking the lower bound
+    if '-' in value_cleaned:
+        value_cleaned = value_cleaned.split('-')[0].strip()
+
+    if value_cleaned in ['Undisclosed']:
         return np.nan
     
     multiplier = 1.0
