@@ -115,7 +115,6 @@ def convert_to_usd(value):
     if '-' in value_cleaned:
         value_cleaned = value_cleaned.split('-')[0].strip()
 
-    # --- FIX: Added 'K' for thousands to the multiplier logic ---
     multiplier = 1.0
     if 'B' in value_cleaned.upper():
         multiplier = 1_000_000_000
@@ -332,6 +331,7 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         with st.spinner("Processing your file... This may take a moment."):
+            # --- FIX: Added na_values to handle em dash on read ---
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
