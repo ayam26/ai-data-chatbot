@@ -41,24 +41,25 @@ def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
     system_prompt = f"""
-    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in one of six modes.
+    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
-    1.  **Correlation Heatmap Mode**: If the prompt asks for "correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
-    2.  **Comparison Mode**: If the prompt asks to "compare means" or "compare distributions" for exited vs. non-exited companies, call `fig = plot_comparison_boxplot(y_col='column_name')`, extracting the column name to compare.
-    3.  **Interaction Scatter Mode**: If the prompt asks to see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`, extracting the two column names.
-    4.  **Training Mode**: If the prompt is to "train" or "predict", generate `results_df, message = train_and_score()`.
-    5.  **Driver Analysis Mode**: If the prompt asks to "explain the model" or "find drivers", generate `fig = get_feature_importance_plot()`.
-    6.  **Conversational Mode**: For anything else, provide a friendly text response.
+    **Modeling & Analysis:**
+    - To "train model" or "predict", generate `results_df, message = train_and_score()`.
+    - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
+    - To "show correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
+    - To "compare means" or "compare distributions", call `fig = plot_comparison_boxplot(y_col='column_name')`.
+    - To see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`.
+
+    **Conversational Mode:**
+    - For anything else, provide a friendly text response.
 
     **Rules:**
     - The output MUST be a single line of Python code, or a conversational response.
     - Use the exact column names provided: `{df_columns}`.
     - The dataframe is ALWAYS named `df`.
 
-    **Advanced Analysis Examples:**
-    - User: "Show me the correlation heatmap of financial metrics." -> AI: `fig = plot_correlation_heatmap()`
+    **Examples:**
     - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
-    - User: "Plot the interaction between Founded Year and Total Funding Amount (USD)." -> AI: `fig = plot_interactive_scatter(x_col='Founded Year', y_col='Total Funding Amount (USD)')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -91,66 +92,38 @@ def get_column_mapping(_model, columns):
 # --- Data Processing and Modeling ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
-    if pd.isna(value):
-        return np.nan
-    
-    if isinstance(value, (int, float)):
-        return float(value)
+    if pd.isna(value): return np.nan
+    if isinstance(value, (int, float)): return float(value)
+    if not isinstance(value, str): return np.nan
 
-    if not isinstance(value, str):
-        return np.nan
-
-    exchange_rates = {
-        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
-        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
-        'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0
-    }
-    
+    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0}
     value_cleaned = value.strip().replace(',', '')
-    
-    if value_cleaned in ['-', '—', 'Undisclosed']:
-        return np.nan
-    
-    if '-' in value_cleaned:
-        value_cleaned = value_cleaned.split('-')[0].strip()
+    if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
+    if '-' in value_cleaned: value_cleaned = value_cleaned.split('-')[0].strip()
 
     multiplier = 1.0
-    if 'B' in value_cleaned.upper():
-        multiplier = 1_000_000_000
-    elif 'M' in value_cleaned.upper():
-        multiplier = 1_000_000
-    elif 'K' in value_cleaned.upper():
-        multiplier = 1_000
+    if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
+    elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper(): multiplier = 1_000
     
     numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-    if not numeric_part_str:
-        return np.nan
+    if not numeric_part_str: return np.nan
     
-    try:
-        numeric_value = float(numeric_part_str)
-    except (ValueError, TypeError):
-        return np.nan
+    try: numeric_value = float(numeric_part_str)
+    except (ValueError, TypeError): return np.nan
     
     rate = 1.0
     for symbol, r in exchange_rates.items():
         if symbol != '$' and symbol in value_cleaned:
             rate = r
             break
-    
     return numeric_value * multiplier * rate
 
-def full_data_prep(df):
-    """
-    Loads a dataframe and performs all cleaning and feature engineering.
-    """
+def engineer_base_features(df):
+    """Creates non-monetary features like Country, Industry, and Year."""
     df = df.copy()
-    df.columns = [col.strip() for col in df.columns]
-
-    # 1. Clean Headquarters Location
     if 'Headquarters Location' in df.columns:
         df['Headquarters Country'] = df['Headquarters Location'].apply(lambda loc: loc.split(',')[-1].strip() if isinstance(loc, str) else 'Unknown')
-
-    # 2. Create Top Industry
     industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
     industry_map = {'Artificial Intelligence (AI)': 'AI', 'FinTech': 'Fintech', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
     def get_top_industry(row):
@@ -161,8 +134,6 @@ def full_data_prep(df):
             if term in combined_industries: return top_industry
         return 'Other'
     df['Top Industry'] = df.apply(get_top_industry, axis=1)
-
-    # 3. Clean Date Columns
     def get_year(date):
         if isinstance(date, str):
             match = re.search(r'\b\d{4}\b', date)
@@ -170,29 +141,27 @@ def full_data_prep(df):
         return pd.NA
     if 'Founded Date' in df.columns: df['Founded Year'] = df['Founded Date'].apply(get_year)
     if 'Exit Date' in df.columns: df['Exit Year'] = df['Exit Date'].apply(get_year)
+    if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
+        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or row['Funding Status'] in ['M&A', 'IPO'] else 0.0, axis=1)
+    return df
 
-    # 4. Convert all monetary data to USD
+def convert_currency_columns(df):
+    """Converts only the monetary columns to USD."""
+    df = df.copy()
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
         if col in df.columns:
             new_col_name = f"{col} (USD)"
             df[new_col_name] = df[col].apply(convert_to_usd)
             df[new_col_name] = df[new_col_name].fillna(0)
-
-    # 5. Create the final 'Exit' column
-    if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
-        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or row['Funding Status'] in ['M&A', 'IPO'] else 0.0, axis=1)
-    
     return df
 
 def train_and_score():
     """Trains the model using the pre-defined robust feature set."""
     df_train = st.session_state.training_data.copy()
-    
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
         model = get_ai_model()
         st.session_state.column_mapping = get_column_mapping(model, df_train.columns.tolist())
-
     mapping = st.session_state.column_mapping
     target = mapping['TARGET_VARIABLE']
 
@@ -242,7 +211,6 @@ def train_and_score():
         for col in text_features:
             if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
             else: df_predict[col] = ''
-
         X_predict = df_predict.drop(columns=[target], errors='ignore')
         probabilities = model.predict_proba(X_predict)[:, 1]
         org_name_col = mapping['ORGANIZATION_IDENTIFIER']
@@ -316,7 +284,7 @@ def plot_interactive_scatter(x_col, y_col):
 
 st.set_page_config(layout="wide")
 st.title("🚀 Autonomous AI Exit Predictor")
-st.caption("With fully automatic column mapping and advanced driver analysis.")
+st.caption("With AI-powered, interactive data preparation and analysis.")
 
 # Initialize session state
 if "messages" not in st.session_state: st.session_state.messages = []
@@ -329,33 +297,33 @@ with st.sidebar:
     st.header("1. Upload Data")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
-        with st.spinner("Processing your file... This may take a moment."):
-            df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
-            st.session_state.training_data = full_data_prep(df_raw)
-            st.success(f"Loaded and prepared '{train_file.name}'.")
-
-            # --- Automatically get column mapping after cleaning ---
-            model = get_ai_model()
-            all_cols = st.session_state.training_data.columns.tolist()
-            st.session_state.column_mapping = get_column_mapping(model, all_cols)
-        
-        # --- NEW: Data Health Check Dashboard ---
-        st.subheader("Data Health Check")
-        with st.expander("View Cleaned Data Preview"):
-            st.dataframe(st.session_state.training_data.head())
-            st.write("**Data Types:**")
-            st.dataframe(st.session_state.training_data.dtypes.astype(str))
-        
-        st.subheader("AI Column Role Analysis")
-        st.json(st.session_state.column_mapping)
-
+        df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
+        st.session_state.training_data = df_raw.copy()
+        st.session_state.training_data.columns = [c.strip() for c in st.session_state.training_data.columns]
+        st.success(f"Loaded '{train_file.name}'.")
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
     if predict_file:
-        with st.spinner("Processing your file..."):
-            df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
-            st.session_state.prediction_data = full_data_prep(df_raw)
-            st.success(f"Loaded and prepared '{predict_file.name}'.")
+        df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
+        st.session_state.prediction_data = df_raw.copy()
+        st.session_state.prediction_data.columns = [c.strip() for c in st.session_state.prediction_data.columns]
+        st.success(f"Loaded '{predict_file.name}'.")
+    
+    # --- NEW: Interactive Data Preparation Section ---
+    if st.session_state.training_data is not None:
+        st.header("2. Data Preparation")
+        if st.button("Prepare Data for Analysis"):
+            with st.spinner("Cleaning data and engineering features..."):
+                st.session_state.training_data = full_data_prep(st.session_state.training_data)
+                if st.session_state.prediction_data is not None:
+                    st.session_state.prediction_data = full_data_prep(st.session_state.prediction_data)
+                st.success("Data preparation complete!")
+        
+        st.subheader("Data Health Check")
+        with st.expander("View Current Data State"):
+            st.dataframe(st.session_state.training_data.head())
+            st.write("**Data Types:**")
+            st.dataframe(st.session_state.training_data.dtypes.astype(str))
 
 # --- Main chat interface ---
 for i, message in enumerate(st.session_state.messages):
@@ -397,7 +365,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                     "get_feature_importance_plot": get_feature_importance_plot,
                     "plot_correlation_heatmap": plot_correlation_heatmap,
                     "plot_comparison_boxplot": plot_comparison_boxplot,
-                    "plot_interactive_scatter": plot_interactive_scatter
+                    "plot_interactive_scatter": plot_interactive_scatter,
                 }
                 
                 try:
