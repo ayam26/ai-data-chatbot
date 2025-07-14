@@ -163,12 +163,19 @@ def full_data_prep(df):
         return 'Other'
     df['Top Industry'] = df.apply(get_top_industry, axis=1)
 
-    # --- FIX: Use robust pd.to_datetime for date parsing ---
+    # --- FIX: Reverted to robust regex for date parsing ---
     # 3. Clean Date Columns
+    def get_year(date):
+        if isinstance(date, str):
+            match = re.search(r'\b(\d{4})\b', date)
+            if match:
+                return match.group(1)
+        return pd.NA
+        
     if 'Founded Date' in df.columns:
-        df['Founded Year'] = pd.to_datetime(df['Founded Date'], errors='coerce').dt.year
+        df['Founded Year'] = pd.to_numeric(df['Founded Date'].apply(get_year), errors='coerce')
     if 'Exit Date' in df.columns:
-        df['Exit Year'] = pd.to_datetime(df['Exit Date'], errors='coerce').dt.year
+        df['Exit Year'] = pd.to_numeric(df['Exit Date'].apply(get_year), errors='coerce')
 
     # 4. Convert all monetary data to USD
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
