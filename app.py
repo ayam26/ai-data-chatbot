@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- FIX: Simplified the AI's instructions ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -120,7 +119,6 @@ def convert_to_usd(value):
             break
     return numeric_value * multiplier * rate
 
-# --- FIX: Restored the full_data_prep function ---
 def full_data_prep(df):
     """
     Loads a dataframe and performs all cleaning and feature engineering.
@@ -196,9 +194,11 @@ def train_and_score():
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
-    numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
-    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
-    text_transformers = [(f'text_{col}', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), col) for col in text_features]
+    # --- FIX: Use more descriptive names for text transformers ---
+    text_transformers = [
+        ('text_Description', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Description'),
+        ('text_Investors', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Top 5 Investors')
+    ]
 
     preprocessor = ColumnTransformer(transformers=[('num', numeric_transformer, numeric_features), ('cat', categorical_transformer, categorical_features)] + text_transformers, remainder='drop')
     model = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))])
@@ -250,7 +250,13 @@ def get_feature_importance_plot():
         st.error(f"Feature name count ({len(feature_names)}) does not match importance value count ({len(importances)}).")
         return None
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '').str.replace('cat__', '').str.replace(r'text_.*?__', '', regex=True)
+    
+    # --- FIX: More specific and readable feature name cleaning ---
+    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '')
+    importance_df['Feature'] = importance_df['Feature'].str.replace('cat__', '')
+    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Description__', 'desc_')
+    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Investors__', 'investor_')
+    
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
     fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h', title='Top 20 Drivers of Successful Exits')
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
