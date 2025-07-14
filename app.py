@@ -92,45 +92,32 @@ def get_column_mapping(_model, columns):
 # --- Data Processing and Modeling ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
-    if pd.isna(value):
-        return np.nan
-    
-    if isinstance(value, (int, float)):
-        return float(value)
+    if pd.isna(value): return np.nan
+    if isinstance(value, (int, float)): return float(value)
+    if not isinstance(value, str): return np.nan
 
-    if not isinstance(value, str):
-        return np.nan
-
-    exchange_rates = {
-        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
-        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
-        'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0
-    }
+    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0}
     
     value_cleaned = value.strip().replace(',', '')
     
-    if value_cleaned in ['-', '—', 'Undisclosed']:
-        return np.nan
+    if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
     
-    if '-' in value_cleaned:
+    # --- FIX: Handle ranges with "to" or "-" ---
+    if ' to ' in value_cleaned.lower():
+        value_cleaned = value_cleaned.lower().split(' to ')[0].strip()
+    elif '-' in value_cleaned:
         value_cleaned = value_cleaned.split('-')[0].strip()
 
     multiplier = 1.0
-    if 'B' in value_cleaned.upper():
-        multiplier = 1_000_000_000
-    elif 'M' in value_cleaned.upper():
-        multiplier = 1_000_000
-    elif 'K' in value_cleaned.upper():
-        multiplier = 1_000
+    if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
+    elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper(): multiplier = 1_000
     
     numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-    if not numeric_part_str:
-        return np.nan
+    if not numeric_part_str: return np.nan
     
-    try:
-        numeric_value = float(numeric_part_str)
-    except (ValueError, TypeError):
-        return np.nan
+    try: numeric_value = float(numeric_part_str)
+    except (ValueError, TypeError): return np.nan
     
     rate = 1.0
     for symbol, r in exchange_rates.items():
@@ -163,19 +150,11 @@ def full_data_prep(df):
         return 'Other'
     df['Top Industry'] = df.apply(get_top_industry, axis=1)
 
-    # --- FIX: Reverted to robust regex for date parsing ---
     # 3. Clean Date Columns
-    def get_year(date):
-        if isinstance(date, str):
-            match = re.search(r'\b(\d{4})\b', date)
-            if match:
-                return match.group(1)
-        return pd.NA
-        
     if 'Founded Date' in df.columns:
-        df['Founded Year'] = pd.to_numeric(df['Founded Date'].apply(get_year), errors='coerce')
+        df['Founded Year'] = pd.to_numeric(df['Founded Date'].astype(str).str.extract(r'(\d{4})'), errors='coerce')
     if 'Exit Date' in df.columns:
-        df['Exit Year'] = pd.to_numeric(df['Exit Date'].apply(get_year), errors='coerce')
+        df['Exit Year'] = pd.to_numeric(df['Exit Date'].astype(str).str.extract(r'(\d{4})'), errors='coerce')
 
     # 4. Convert all monetary data to USD
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
@@ -310,6 +289,15 @@ def plot_comparison_boxplot(y_col):
         st.error(f"Column '{y_col}' not found in the data. Available numeric columns: {df.select_dtypes(include=np.number).columns.tolist()}")
         return None
     target = st.session_state.column_mapping['TARGET_VARIABLE']
+    
+    # --- NEW: Pre-plot diagnostic ---
+    st.subheader("Pre-Plot Diagnostic")
+    agg_data = df.groupby(target)[y_col].describe()
+    st.dataframe(agg_data)
+    if df[y_col].sum() == 0:
+        st.error("Plotting failed because all values in the selected column are zero. This indicates a data cleaning failure.")
+        return None
+        
     fig = px.box(df, x=target, y=y_col, title=f'Comparison of {y_col} for Exited vs. Non-Exited Companies')
     return fig
 
