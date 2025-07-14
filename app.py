@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: System prompt now includes specific data cleaning and debug commands ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -74,13 +73,11 @@ def get_ai_response(model, prompt, df_columns):
         return f"ERROR: AI generation failed: {e}"
 
 # --- Data Processing and Modeling ---
-# --- FIX: Upgraded currency conversion function to handle ranges and raw numbers ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
     if pd.isna(value):
         return np.nan
     
-    # If the value is already a number, just return it
     if isinstance(value, (int, float)):
         return float(value)
 
@@ -95,13 +92,13 @@ def convert_to_usd(value):
     
     value_cleaned = value.strip().replace(',', '')
     
-    # Handle ranges by taking the lower bound
+    # --- FIX: Added the em dash '—' to the list of characters to treat as missing ---
+    if value_cleaned in ['-', '—', 'Undisclosed']:
+        return np.nan
+    
     if '-' in value_cleaned:
         value_cleaned = value_cleaned.split('-')[0].strip()
 
-    if value_cleaned in ['Undisclosed']:
-        return np.nan
-    
     multiplier = 1.0
     if 'B' in value_cleaned.upper():
         multiplier = 1_000_000_000
@@ -118,7 +115,6 @@ def convert_to_usd(value):
         return np.nan
     
     rate = 1.0
-    # Check for non-dollar symbols first
     for symbol, r in exchange_rates.items():
         if symbol != '$' and symbol in value_cleaned:
             rate = r
