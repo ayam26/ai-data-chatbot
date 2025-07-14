@@ -40,6 +40,7 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
+    # --- FIX: Updated examples to use the overwritten column names (no more '(USD)') ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -59,7 +60,7 @@ def get_ai_response(model, prompt, df_columns):
     - The dataframe is ALWAYS named `df`.
 
     **Examples:**
-    - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    - User: "Compare the Total Funding Amount for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -67,7 +68,6 @@ def get_ai_response(model, prompt, df_columns):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
-# --- FIX: Restored the missing get_column_mapping function ---
 @st.cache_data
 def get_column_mapping(_model, columns):
     """Uses AI to map columns to required roles for VC prediction."""
@@ -175,9 +175,9 @@ def full_data_prep(df):
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
     for col in money_cols:
         if col in df.columns:
-            new_col_name = f"{col} (USD)"
-            df[new_col_name] = df[col].apply(convert_to_usd)
-            df[new_col_name] = df[new_col_name].fillna(0)
+            # --- FIX: Overwrite the original column with cleaned values ---
+            df[col] = df[col].apply(convert_to_usd)
+            df[col] = df[col].fillna(0)
 
     # 5. Create the final 'Exit' column
     if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
@@ -199,7 +199,8 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be identified or selected."
 
-    numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
+    # --- FIX: Updated numeric features list to remove '(USD)' suffix ---
+    numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount', 'Total Funding Amount']
     categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
     text_features = ['Description', 'Top 5 Investors']
 
@@ -324,7 +325,6 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         with st.spinner("Processing your file... This may take a moment."):
-            # --- FIX: Added na_values to handle em dash on read ---
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
