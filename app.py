@@ -90,6 +90,7 @@ def get_column_mapping(_model, columns):
 
 
 # --- Data Processing and Modeling ---
+# --- FIX: Completely rewritten currency conversion function for robustness ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
     if pd.isna(value): return np.nan
@@ -102,28 +103,31 @@ def convert_to_usd(value):
     
     if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
     
-    # --- FIX: Handle ranges with "to" or "-" ---
+    # Handle ranges by taking the lower bound
     if ' to ' in value_cleaned.lower():
         value_cleaned = value_cleaned.lower().split(' to ')[0].strip()
-    elif '-' in value_cleaned:
+    elif '-' in value_cleaned and not value_cleaned.startswith('-'):
         value_cleaned = value_cleaned.split('-')[0].strip()
 
+    # Determine the rate first, before removing symbols
+    rate = 1.0
+    for symbol, r in exchange_rates.items():
+        if symbol in value_cleaned:
+            rate = r
+            break
+    
+    # Determine the multiplier
     multiplier = 1.0
     if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
     elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
     elif 'K' in value_cleaned.upper(): multiplier = 1_000
     
+    # Extract only the number
     numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
     if not numeric_part_str: return np.nan
     
     try: numeric_value = float(numeric_part_str)
     except (ValueError, TypeError): return np.nan
-    
-    rate = 1.0
-    for symbol, r in exchange_rates.items():
-        if symbol != '$' and symbol in value_cleaned:
-            rate = r
-            break
     
     return numeric_value * multiplier * rate
 
@@ -152,9 +156,9 @@ def full_data_prep(df):
 
     # 3. Clean Date Columns
     if 'Founded Date' in df.columns:
-        df['Founded Year'] = pd.to_numeric(df['Founded Date'].astype(str).str.extract(r'(\d{4})'), errors='coerce')
+        df['Founded Year'] = pd.to_numeric(df['Founded Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
     if 'Exit Date' in df.columns:
-        df['Exit Year'] = pd.to_numeric(df['Exit Date'].astype(str).str.extract(r'(\d{4})'), errors='coerce')
+        df['Exit Year'] = pd.to_numeric(df['Exit Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
 
     # 4. Convert all monetary data to USD
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
@@ -289,15 +293,6 @@ def plot_comparison_boxplot(y_col):
         st.error(f"Column '{y_col}' not found in the data. Available numeric columns: {df.select_dtypes(include=np.number).columns.tolist()}")
         return None
     target = st.session_state.column_mapping['TARGET_VARIABLE']
-    
-    # --- NEW: Pre-plot diagnostic ---
-    st.subheader("Pre-Plot Diagnostic")
-    agg_data = df.groupby(target)[y_col].describe()
-    st.dataframe(agg_data)
-    if df[y_col].sum() == 0:
-        st.error("Plotting failed because all values in the selected column are zero. This indicates a data cleaning failure.")
-        return None
-        
     fig = px.box(df, x=target, y=y_col, title=f'Comparison of {y_col} for Exited vs. Non-Exited Companies')
     return fig
 
