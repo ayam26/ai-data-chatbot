@@ -217,7 +217,10 @@ def train_and_score():
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
-    # Use more descriptive names for text transformers to improve plot readability
+    # --- FIX: Restored the missing transformer definitions ---
+    numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
+    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+    
     text_transformers = [
         ('text_Description', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Description'),
         ('text_Investors', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Top 5 Investors')
@@ -274,7 +277,6 @@ def get_feature_importance_plot():
         return None
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
     
-    # --- FIX: More specific and readable feature name cleaning ---
     importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '')
     importance_df['Feature'] = importance_df['Feature'].str.replace('cat__', '')
     importance_df['Feature'] = importance_df['Feature'].str.replace('text_Description__', 'desc_')
