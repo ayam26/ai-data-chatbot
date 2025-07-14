@@ -169,8 +169,13 @@ def full_data_prep(df):
             match = re.search(r'\b\d{4}\b', date)
             if match: return match.group(0)
         return pd.NA
-    if 'Founded Date' in df.columns: df['Founded Year'] = df['Founded Date'].apply(get_year)
-    if 'Exit Date' in df.columns: df['Exit Year'] = df['Exit Date'].apply(get_year)
+    if 'Founded Date' in df.columns:
+        df['Founded Year'] = df['Founded Date'].apply(get_year)
+        # --- FIX: Convert year to numeric immediately after creation ---
+        df['Founded Year'] = pd.to_numeric(df['Founded Year'], errors='coerce')
+    if 'Exit Date' in df.columns:
+        df['Exit Year'] = df['Exit Date'].apply(get_year)
+        df['Exit Year'] = pd.to_numeric(df['Exit Year'], errors='coerce')
 
     # 4. Convert all monetary data to USD
     money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
@@ -217,7 +222,6 @@ def train_and_score():
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
-    # --- FIX: Restored the missing transformer definitions ---
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
     categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
     
