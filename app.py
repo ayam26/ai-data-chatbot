@@ -11,7 +11,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
@@ -41,25 +41,24 @@ def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
     system_prompt = f"""
-    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
+    You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in one of six modes.
 
-    **Modeling & Analysis:**
-    - To "train model" or "predict", generate `results_df, message = train_and_score()`.
-    - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
-    - To "show correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
-    - To "compare means" or "compare distributions", call `fig = plot_comparison_boxplot(y_col='column_name')`.
-    - To see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`.
-
-    **Conversational Mode:**
-    - For anything else, provide a friendly text response.
+    1.  **Correlation Heatmap Mode**: If the prompt asks for "correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
+    2.  **Comparison Mode**: If the prompt asks to "compare means" or "compare distributions" for exited vs. non-exited companies, call `fig = plot_comparison_boxplot(y_col='column_name')`, extracting the column name to compare.
+    3.  **Interaction Scatter Mode**: If the prompt asks to see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`, extracting the two column names.
+    4.  **Training Mode**: If the prompt is to "train" or "predict", generate `results_df, message = train_and_score()`.
+    5.  **Driver Analysis Mode**: If the prompt asks to "explain the model" or "find drivers", generate `fig = get_feature_importance_plot()`.
+    6.  **Conversational Mode**: For anything else, provide a friendly text response.
 
     **Rules:**
     - The output MUST be a single line of Python code, or a conversational response.
     - Use the exact column names provided: `{df_columns}`.
     - The dataframe is ALWAYS named `df`.
 
-    **Examples:**
-    - User: "Compare the Total Funding Amount for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    **Advanced Analysis Examples:**
+    - User: "Show me the correlation heatmap of financial metrics." -> AI: `fig = plot_correlation_heatmap()`
+    - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    - User: "Plot the interaction between Founded Year and Total Funding Amount (USD)." -> AI: `fig = plot_interactive_scatter(x_col='Founded Year', y_col='Total Funding Amount (USD)')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -331,7 +330,6 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         with st.spinner("Processing your file... This may take a moment."):
-            # --- FIX: Added na_values to handle em dash on read ---
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
