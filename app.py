@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- FIX: Removed manual data prep commands from AI instructions ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -68,6 +67,29 @@ def get_ai_response(model, prompt, df_columns):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
+# --- FIX: Restored the missing get_column_mapping function ---
+@st.cache_data
+def get_column_mapping(_model, columns):
+    """Uses AI to map columns to required roles for VC prediction."""
+    prompt = f"""
+    Analyze the following list of column names from a venture capital dataset: {columns}.
+    Your task is to identify the columns that best correspond to these four essential roles:
+    1.  `TARGET_VARIABLE`: The column to predict. This is likely named 'Exit', 'Status', or 'Is Exited'.
+    2.  `ORGANIZATION_IDENTIFIER`: The name of the company. Likely 'Organization Name', 'Company Name', etc.
+    3.  `TEXT_DESCRIPTION`: A long text description of the company. Likely 'Description', 'Overview', etc.
+    4.  `CATEGORICAL_INDUSTRY`: The primary industry category. Likely 'Industry', 'Top Industry', 'Vertical', etc.
+
+    Return your answer as a JSON object with these four keys. For each key, the value should be your best guess for the column name from the list. If you cannot find a suitable column for a role, use the value "N/A".
+    """
+    try:
+        response = _model.generate_content(prompt)
+        json_string = response.text.strip().replace("```json", "").replace("```", "")
+        return json.loads(json_string)
+    except (json.JSONDecodeError, Exception) as e:
+        st.warning(f"AI column mapping failed: {e}. Please map columns manually.")
+        return {"TARGET_VARIABLE": "N/A", "ORGANIZATION_IDENTIFIER": "N/A", "TEXT_DESCRIPTION": "N/A", "CATEGORICAL_INDUSTRY": "N/A"}
+
+
 # --- Data Processing and Modeling ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
@@ -88,7 +110,6 @@ def convert_to_usd(value):
     
     value_cleaned = value.strip().replace(',', '')
     
-    # --- FIX: Added the em dash '—' to the list of characters to treat as missing ---
     if value_cleaned in ['-', '—', 'Undisclosed']:
         return np.nan
     
@@ -303,8 +324,7 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         with st.spinner("Processing your file... This may take a moment."):
-            df_raw = pd.read_csv(train_file) if train_file.name.endswith('.csv') else pd.read_excel(train_file)
-            # --- FIX: Call the robust cleaning function immediately on upload ---
+            df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
 
@@ -327,7 +347,7 @@ with st.sidebar:
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
     if predict_file:
         with st.spinner("Processing your file..."):
-            df_raw = pd.read_csv(predict_file) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file)
+            df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
