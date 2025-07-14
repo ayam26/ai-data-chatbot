@@ -171,7 +171,6 @@ def full_data_prep(df):
         return pd.NA
     if 'Founded Date' in df.columns:
         df['Founded Year'] = df['Founded Date'].apply(get_year)
-        # --- FIX: Convert year to numeric immediately after creation ---
         df['Founded Year'] = pd.to_numeric(df['Founded Year'], errors='coerce')
     if 'Exit Date' in df.columns:
         df['Exit Year'] = df['Exit Date'].apply(get_year)
@@ -344,6 +343,7 @@ with st.sidebar:
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
         with st.spinner("Processing your file... This may take a moment."):
+            # --- FIX: Added na_values to handle em dash on read ---
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
