@@ -67,6 +67,7 @@ def get_ai_response(model, prompt, df_columns):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
+# --- FIX: Restored the missing get_column_mapping function ---
 @st.cache_data
 def get_column_mapping(_model, columns):
     """Uses AI to map columns to required roles for VC prediction."""
@@ -92,31 +93,52 @@ def get_column_mapping(_model, columns):
 # --- Data Processing and Modeling ---
 def convert_to_usd(value):
     """A robust function to convert a single currency string to a float."""
-    if pd.isna(value): return np.nan
-    if isinstance(value, (int, float)): return float(value)
-    if not isinstance(value, str): return np.nan
+    if pd.isna(value):
+        return np.nan
+    
+    if isinstance(value, (int, float)):
+        return float(value)
 
-    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0}
+    if not isinstance(value, str):
+        return np.nan
+
+    exchange_rates = {
+        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
+        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
+        'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0
+    }
+    
     value_cleaned = value.strip().replace(',', '')
-    if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
-    if '-' in value_cleaned: value_cleaned = value_cleaned.split('-')[0].strip()
+    
+    if value_cleaned in ['-', '—', 'Undisclosed']:
+        return np.nan
+    
+    if '-' in value_cleaned:
+        value_cleaned = value_cleaned.split('-')[0].strip()
 
     multiplier = 1.0
-    if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
-    elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
-    elif 'K' in value_cleaned.upper(): multiplier = 1_000
+    if 'B' in value_cleaned.upper():
+        multiplier = 1_000_000_000
+    elif 'M' in value_cleaned.upper():
+        multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper():
+        multiplier = 1_000
     
     numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-    if not numeric_part_str: return np.nan
+    if not numeric_part_str:
+        return np.nan
     
-    try: numeric_value = float(numeric_part_str)
-    except (ValueError, TypeError): return np.nan
+    try:
+        numeric_value = float(numeric_part_str)
+    except (ValueError, TypeError):
+        return np.nan
     
     rate = 1.0
     for symbol, r in exchange_rates.items():
         if symbol != '$' and symbol in value_cleaned:
             rate = r
             break
+    
     return numeric_value * multiplier * rate
 
 def full_data_prep(df):
@@ -168,9 +190,11 @@ def full_data_prep(df):
 def train_and_score():
     """Trains the model using the pre-defined robust feature set."""
     df_train = st.session_state.training_data.copy()
+    
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
         model = get_ai_model()
         st.session_state.column_mapping = get_column_mapping(model, df_train.columns.tolist())
+
     mapping = st.session_state.column_mapping
     target = mapping['TARGET_VARIABLE']
 
@@ -194,11 +218,9 @@ def train_and_score():
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
-    # --- FIX: Use more descriptive names for text transformers ---
-    text_transformers = [
-        ('text_Description', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Description'),
-        ('text_Investors', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Top 5 Investors')
-    ]
+    numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
+    categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+    text_transformers = [(f'text_{col}', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), col) for col in text_features]
 
     preprocessor = ColumnTransformer(transformers=[('num', numeric_transformer, numeric_features), ('cat', categorical_transformer, categorical_features)] + text_transformers, remainder='drop')
     model = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))])
@@ -250,13 +272,7 @@ def get_feature_importance_plot():
         st.error(f"Feature name count ({len(feature_names)}) does not match importance value count ({len(importances)}).")
         return None
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-    
-    # --- FIX: More specific and readable feature name cleaning ---
-    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('cat__', '')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Description__', 'desc_')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Investors__', 'investor_')
-    
+    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '').str.replace('cat__', '').str.replace(r'text_.*?__', '', regex=True)
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
     fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h', title='Top 20 Drivers of Successful Exits')
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
