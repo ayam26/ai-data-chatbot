@@ -190,7 +190,13 @@ def full_data_prep(df):
 
 def train_and_score():
     """Trains the model using the pre-defined robust feature set."""
+    if 'training_data' not in st.session_state or st.session_state.training_data is None:
+        return None, "ERROR: Training data has not been uploaded."
+    if 'prediction_data' not in st.session_state or st.session_state.prediction_data is None:
+        return None, "ERROR: Prediction data has not been uploaded."
+        
     df_train = st.session_state.training_data.copy()
+    df_predict = st.session_state.prediction_data.copy()
     
     if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
         model = get_ai_model()
@@ -238,24 +244,20 @@ def train_and_score():
     accuracy = model.named_steps['classifier'].oob_score_
     message = f"✅ Model trained with an estimated accuracy of {accuracy:.2%}. You can now score the prediction data or analyze feature importance."
     
-    if st.session_state.prediction_data is not None:
-        df_predict = st.session_state.prediction_data.copy()
-        for col in numeric_features:
-            if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
-            else: df_predict[col] = np.nan
-        for col in categorical_features:
-             if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
-             else: df_predict[col] = 'Unknown'
-        for col in text_features:
-            if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
-            else: df_predict[col] = ''
-        X_predict = df_predict.drop(columns=[target], errors='ignore')
-        probabilities = model.predict_proba(X_predict)[:, 1]
-        org_name_col = mapping['ORGANIZATION_IDENTIFIER']
-        results_df = pd.DataFrame({'Organization Name': df_predict[org_name_col] if org_name_col != "N/A" and org_name_col in df_predict.columns else df_predict.index, 'Success Score': (probabilities * 100).round().astype(int)}).sort_values(by='Success Score', ascending=False)
-        return results_df, message
-    else:
-        return None, message
+    for col in numeric_features:
+        if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+        else: df_predict[col] = np.nan
+    for col in categorical_features:
+         if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+         else: df_predict[col] = 'Unknown'
+    for col in text_features:
+        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
+        else: df_predict[col] = ''
+    X_predict = df_predict.drop(columns=[target], errors='ignore')
+    probabilities = model.predict_proba(X_predict)[:, 1]
+    org_name_col = mapping['ORGANIZATION_IDENTIFIER']
+    results_df = pd.DataFrame({'Organization Name': df_predict[org_name_col] if org_name_col != "N/A" and org_name_col in df_predict.columns else df_predict.index, 'Success Score': (probabilities * 100).round().astype(int)}).sort_values(by='Success Score', ascending=False)
+    return results_df, message
 
 # --- Advanced Analysis Functions ---
 
@@ -333,48 +335,34 @@ st.caption("With fully automatic column mapping and advanced driver analysis.")
 if "messages" not in st.session_state: st.session_state.messages = []
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
+if "analysis_data" not in st.session_state: st.session_state.analysis_data = None # New state for analysis
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
-if "active_data" not in st.session_state: st.session_state.active_data = "Training"
 
 with st.sidebar:
-    st.header("1. Upload Data")
+    st.header("1. Prediction & Training Files")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"])
     if train_file:
-        with st.spinner("Processing your file... This may take a moment."):
+        with st.spinner("Processing Training Data..."):
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
 
-            # --- Automatically get column mapping after cleaning ---
-            model = get_ai_model()
-            all_cols = st.session_state.training_data.columns.tolist()
-            st.session_state.column_mapping = get_column_mapping(model, all_cols)
-        
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
     if predict_file:
-        with st.spinner("Processing your file..."):
+        with st.spinner("Processing Prediction Data..."):
             df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
-    # --- NEW: Active Data Selector ---
-    if st.session_state.training_data is not None:
-        st.header("2. Analysis Target")
-        options = ["Training Data"]
-        if st.session_state.prediction_data is not None:
-            options.append("Prediction Data")
-        st.session_state.active_data = st.radio("Choose data to analyze, sort, or filter:", options)
-
-        st.subheader("Data Health Check")
-        with st.expander("View Cleaned Data Preview"):
-            st.dataframe(st.session_state.training_data.head())
-            st.write("**Data Types:**")
-            st.dataframe(st.session_state.training_data.dtypes.astype(str))
-        
-        st.subheader("AI Column Role Analysis")
-        st.json(st.session_state.column_mapping)
-
+    # --- NEW: Separate Uploader for Analysis and Reformatting ---
+    st.header("2. Analysis & Reformatting")
+    analysis_file = st.file_uploader("Upload a file to sort, filter, or reformat", type=["xlsx", "csv"])
+    if analysis_file:
+        with st.spinner("Loading Analysis Data..."):
+            df_raw = pd.read_csv(analysis_file, na_values=['—']) if analysis_file.name.endswith('.csv') else pd.read_excel(analysis_file, na_values=['—'])
+            st.session_state.analysis_data = full_data_prep(df_raw)
+            st.success(f"Loaded '{analysis_file.name}' for analysis.")
 
 # --- Main chat interface ---
 if not st.session_state.messages:
@@ -382,26 +370,11 @@ if not st.session_state.messages:
         """
         **Welcome to the Autonomous AI Exit Predictor!**
 
-        To get started, upload your training data in the sidebar. Once your data is automatically prepared, you can use the following prompts to analyze it:
-
-        - **To train the predictive model:**
-          - `train model`
-
-        - **To understand what drives success:**
-          - `what are the main drivers of success?`
-          - `show me the correlation heatmap`
-          - `compare the means for Total Funding Amount (USD)`
-          - `plot the interaction between Founded Year and Total Funding Amount (USD)`
-        
-        - **To reformat your data (examples):**
-          - `create a 'Funding per Founder' column`
-          - `show me all the Fintech companies`
-          - `sort the data by Founded Year`
-
-        Just type your command in the chat box below!
+        To get started, upload your data files in the sidebar.
+        - **Prediction & Training:** Upload files here to use the `train model` command.
+        - **Analysis & Reformatting:** Upload a file here to use commands like `sort`, `filter`, `create a column`, or to generate plots.
         """
     )
-
 
 for i, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
@@ -415,19 +388,26 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        if st.session_state.training_data is None:
-            st.warning("Please upload at least a training file first.")
-            st.stop()
+        
+        # --- NEW: Determine which dataframe to use based on the command type ---
+        context_df = None
+        is_training_command = "train" in prompt or "predict" in prompt
+        
+        if is_training_command:
+            if st.session_state.training_data is not None:
+                context_df = st.session_state.training_data
+            else:
+                st.warning("Please upload Training Data to run the model.")
+                st.stop()
+        else:
+            if st.session_state.analysis_data is not None:
+                context_df = st.session_state.analysis_data
+            else:
+                st.warning("Please upload a file in the 'Analysis & Reformatting' section to perform this action.")
+                st.stop()
         
         with st.spinner("🧠 AI is thinking..."):
             model = get_ai_model()
-            
-            # --- NEW: Determine which dataframe to use based on the selector ---
-            if st.session_state.active_data == "Training Data":
-                context_df = st.session_state.training_data
-            else:
-                context_df = st.session_state.prediction_data
-
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
             
             cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
@@ -464,13 +444,10 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_data = local_vars['result_data']
                         response_content = "✅ Here is the result of your query:"
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
-                        # --- NEW: Update the correct dataframe based on the selector ---
-                        if st.session_state.active_data == "Training Data":
-                            st.session_state.training_data = local_vars['df']
-                        else:
-                            st.session_state.prediction_data = local_vars['df']
-                        response_content = f"✅ Data reformatting successful! The '{st.session_state.active_data}' has been updated."
-                        st.dataframe(local_vars['df'].head())
+                        # Update the analysis dataframe if it was changed
+                        st.session_state.analysis_data = local_vars['df']
+                        response_content = "✅ Data reformatting successful! The 'Analysis & Reformatting' data has been updated."
+                        st.dataframe(st.session_state.analysis_data.head())
 
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
