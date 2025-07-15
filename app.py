@@ -366,8 +366,8 @@ with st.sidebar:
             st.success(f"Loaded '{analysis_file.name}' for analysis.")
 
 # --- Main chat interface ---
+# --- FIX: Updated welcome message to reflect new workflow ---
 if not st.session_state.messages:
-    # --- FIX: Updated welcome message to reflect new workflow ---
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
