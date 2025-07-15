@@ -374,9 +374,19 @@ if not st.session_state.messages:
 
         To get started, upload your data files in the sidebar.
 
-        - **For Prediction & Training:** Upload files to the first section to use the `train model` command and to run analysis on the training data (e.g., `what are the main drivers of success?`).
+        ### **1. Prediction & Training**
+        Upload files to this section to train the predictive model and analyze the results. All commands in this section apply to the **Training Data**.
+        - **`train model`**: Trains the model and scores the companies in your Prediction Data file.
+        - **`what are the main drivers of success?`**: Shows a chart of the most important factors the model learned.
+        - **`show me the correlation heatmap`**: Creates a heatmap of all numerical columns.
+        - **`compare the means for Total Funding Amount (USD)`**: Creates a box plot comparing a metric for exited vs. non-exited companies.
+        - **`plot the interaction between Founded Year and Total Funding Amount (USD)`**: Creates a scatter plot to see how two variables relate.
 
-        - **For Reformatting:** Upload a file to the second section ("Reformatting") to perform standalone tasks like sorting, filtering, or creating new columns (e.g., `show me all the Fintech companies`).
+        ### **2. Reformatting**
+        Upload a file here for general-purpose data manipulation. All commands in this section apply to the **Reformatting** file.
+        - **`show me all the Fintech companies`**: Filters the data to show only rows where the 'Top Industry' is 'Fintech'.
+        - **`sort the data by Founded Year`**: Sorts the entire spreadsheet by the 'Founded Year' column.
+        - **`create a 'Funding per Founder' column`**: Creates a new column by dividing 'Total Funding Amount (USD)' by 'Number of Founders'.
 
         Just type your command in the chat box below!
         """
