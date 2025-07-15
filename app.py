@@ -365,14 +365,26 @@ with st.sidebar:
             st.success(f"Loaded '{analysis_file.name}' for analysis.")
 
 # --- Main chat interface ---
+# --- FIX: Restored and updated the welcome message ---
 if not st.session_state.messages:
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
 
         To get started, upload your data files in the sidebar.
-        - **Prediction & Training:** Upload files here to use the `train model` command.
-        - **Analysis & Reformatting:** Upload a file here to use commands like `sort`, `filter`, `create a column`, or to generate plots.
+
+        - **For Prediction & Training:** Upload files to the first two uploaders, then use the `train model` command.
+
+        - **For Analysis & Reformatting:** Upload a file to the third uploader ("Analysis & Reformatting"). You can then use commands like:
+          - `show me all the Fintech companies`
+          - `sort the data by Founded Year`
+          - `create a 'Funding per Founder' column`
+          - `what are the main drivers of success?`
+          - `show me the correlation heatmap`
+          - `compare the means for Total Funding Amount (USD)`
+          - `plot the interaction between Founded Year and Total Funding Amount (USD)`
+
+        Just type your command in the chat box below!
         """
     )
 
