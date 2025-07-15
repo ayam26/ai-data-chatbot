@@ -40,7 +40,7 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- FIX: Added Data Reformatting Mode to the AI's instructions ---
+    # --- Updated system prompt with Data Reformatting Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -385,6 +385,11 @@ if not st.session_state.messages:
           - `show me the correlation heatmap`
           - `compare the means for Total Funding Amount (USD)`
           - `plot the interaction between Founded Year and Total Funding Amount (USD)`
+        
+        - **To reformat your data (examples):**
+          - `create a 'Funding per Founder' column`
+          - `show me all the Fintech companies`
+          - `sort the data by Founded Year`
 
         Just type your command in the chat box below!
         """
@@ -416,7 +421,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
             cleaned_response = cleaned_response.replace("`", "")
             cleaned_response = cleaned_response.replace("‘", "'").replace("’", "'")
 
-            code_keywords = ['fig =', 'train_and_score', 'df =']
+            code_keywords = ['fig =', 'train_and_score', 'df =', 'result_data =']
             is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
             if cleaned_response.startswith("ERROR:"):
@@ -442,7 +447,14 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_content = f"✅ Here is your analysis for '{prompt}'"
                     elif 'results_df' in local_vars:
                         response_data, response_content = local_vars["results_df"], local_vars["message"]
-                    
+                    elif 'result_data' in local_vars:
+                        response_data = local_vars['result_data']
+                        response_content = "✅ Here is the result of your query:"
+                    elif 'df' in local_vars and not context_df.equals(local_vars['df']):
+                        st.session_state.training_data = local_vars['df']
+                        response_content = "✅ Data reformatting successful! The data has been updated."
+                        st.dataframe(st.session_state.training_data.head())
+
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
                     if response_chart is not None: st.plotly_chart(response_chart, use_container_width=True, key="new_chart")
