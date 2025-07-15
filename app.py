@@ -40,8 +40,13 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
+    # --- FIX: Added Data Reformatting Mode to the AI's instructions ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
+
+    **Data Reformatting Mode**:
+    - If the prompt is to "create", "make", or "generate" a new column, generate the pandas command and assign the modified dataframe back to `df`.
+    - If the prompt is to "sort", "filter", "show", or "display" a subset of data, generate the pandas command and assign the result to a variable named `result_data`.
 
     **Modeling & Analysis:**
     - To "train model" or "predict", generate `results_df, message = train_and_score()`.
@@ -59,7 +64,8 @@ def get_ai_response(model, prompt, df_columns):
     - The dataframe is ALWAYS named `df`.
 
     **Examples:**
-    - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    - User: "create a 'Funding per Founder' column" -> AI: `df = df.assign(FundingPerFounder=df['Total Funding Amount (USD)'] / df['Number of Founders'])`
+    - User: "show me all the Fintech companies" -> AI: `result_data = df[df['Top Industry'] == 'Fintech']`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -364,7 +370,6 @@ with st.sidebar:
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
 # --- Main chat interface ---
-# --- FIX: Added welcome message for new users ---
 if not st.session_state.messages:
     st.info(
         """
