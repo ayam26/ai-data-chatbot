@@ -72,6 +72,7 @@ def get_ai_response(model, prompt, df_columns):
     except Exception as e:
         return f"ERROR: AI generation failed: {e}"
 
+# --- FIX: Restored the missing get_column_mapping function ---
 @st.cache_data
 def get_column_mapping(_model, columns):
     """Uses AI to map columns to required roles for VC prediction."""
@@ -335,19 +336,32 @@ st.caption("With fully automatic column mapping and advanced driver analysis.")
 if "messages" not in st.session_state: st.session_state.messages = []
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
-if "analysis_data" not in st.session_state: st.session_state.analysis_data = None # New state for analysis
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 
 with st.sidebar:
-    # --- FIX: Re-architected sidebar for clarity ---
-    st.header("1. Prediction & Training Files")
+    # --- FIX: Simplified to a single, unified workflow ---
+    st.header("1. Upload Data")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
     if train_file:
         with st.spinner("Processing Training Data..."):
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
+
+            # --- Automatically get column mapping after cleaning ---
+            model = get_ai_model()
+            all_cols = st.session_state.training_data.columns.tolist()
+            st.session_state.column_mapping = get_column_mapping(model, all_cols)
+        
+        st.subheader("Data Health Check")
+        with st.expander("View Cleaned Data Preview"):
+            st.dataframe(st.session_state.training_data.head())
+            st.write("**Data Types:**")
+            st.dataframe(st.session_state.training_data.dtypes.astype(str))
+        
+        st.subheader("AI Column Role Analysis")
+        st.json(st.session_state.column_mapping)
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
     if predict_file:
@@ -356,29 +370,25 @@ with st.sidebar:
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
-    # --- FIX: Changed header to 'Reformatting' ---
-    st.header("2. Reformatting")
-    analysis_file = st.file_uploader("Upload a file to sort, filter, or reformat", type=["xlsx", "csv"], key="analysis")
-    if analysis_file:
-        with st.spinner("Loading Analysis Data..."):
-            df_raw = pd.read_csv(analysis_file, na_values=['—']) if analysis_file.name.endswith('.csv') else pd.read_excel(analysis_file, na_values=['—'])
-            st.session_state.analysis_data = full_data_prep(df_raw)
-            st.success(f"Loaded '{analysis_file.name}' for analysis.")
-
 # --- Main chat interface ---
-# --- FIX: Updated welcome message to reflect new workflow ---
 if not st.session_state.messages:
+    # --- FIX: Updated welcome message for the unified workflow ---
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
 
-        To get started, upload your data files in the sidebar.
+        To get started, upload your `Training Data` and `Prediction Data` in the sidebar. 
+        The app will automatically clean and prepare your files. 
+        
+        Once loaded, you can use commands like:
 
-        - **For Prediction & Training:** Upload files to the first section to use the `train model` command and to run analysis on the training data (e.g., `what are the main drivers of success?`).
-
-        - **For Reformatting:** Upload a file to the second section ("Reformatting") to perform standalone tasks like sorting, filtering, or creating new columns (e.g., `show me all the Fintech companies`).
-
-        Just type your command in the chat box below!
+        - **`train model`**: To train the predictor and score your new companies.
+        - **`what are the main drivers of success?`**: To see which factors are most important.
+        - **`show me the correlation heatmap`**: To visualize how numerical features relate.
+        - **`compare the means for Total Funding Amount (USD)`**: To compare a metric for exited vs. non-exited companies.
+        - **`plot the interaction between Founded Year and Total Funding Amount (USD)`**: To see how two variables interact.
+        - **`show me all the Fintech companies`**: To filter and view your data.
+        - **`create a 'Funding per Founder' column`**: To engineer new features.
         """
     )
 
@@ -395,23 +405,12 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
 
     with st.chat_message("assistant"):
         
-        # --- FIX: Clearer logic for determining which dataframe to use ---
-        context_df = None
-        is_training_command = "train" in prompt
-        is_analysis_command = any(keyword in prompt for keyword in ["drivers", "correlation", "heatmap", "compare", "interaction"])
+        if st.session_state.training_data is None:
+            st.warning("Please upload at least a training file first.")
+            st.stop()
         
-        if is_training_command or is_analysis_command:
-            if st.session_state.training_data is not None:
-                context_df = st.session_state.training_data
-            else:
-                st.warning("Please upload Training Data to run the model or perform analysis.")
-                st.stop()
-        else: # Reformatting commands
-            if st.session_state.analysis_data is not None:
-                context_df = st.session_state.analysis_data
-            else:
-                st.warning("Please upload a file in the 'Reformatting' section to perform this action.")
-                st.stop()
+        # All commands now operate on the training data by default
+        context_df = st.session_state.training_data
         
         with st.spinner("🧠 AI is thinking..."):
             model = get_ai_model()
@@ -452,10 +451,10 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_data = local_vars['result_data']
                         response_content = "✅ Here is the result of your query:"
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
-                        # Update the analysis dataframe if it was changed
-                        st.session_state.analysis_data = local_vars['df']
-                        response_content = "✅ Data reformatting successful! The 'Reformatting' data has been updated."
-                        st.dataframe(st.session_state.analysis_data.head())
+                        # Update the training dataframe if it was changed
+                        st.session_state.training_data = local_vars['df']
+                        response_content = "✅ Data reformatting successful! The 'Training Data' has been updated."
+                        st.dataframe(st.session_state.training_data.head())
 
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
