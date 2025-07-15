@@ -356,7 +356,8 @@ with st.sidebar:
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
-    st.header("2. Analysis & Reformatting")
+    # --- FIX: Changed header to 'Reformatting' ---
+    st.header("2. Reformatting")
     analysis_file = st.file_uploader("Upload a file to sort, filter, or reformat", type=["xlsx", "csv"], key="analysis")
     if analysis_file:
         with st.spinner("Loading Analysis Data..."):
@@ -365,6 +366,7 @@ with st.sidebar:
             st.success(f"Loaded '{analysis_file.name}' for analysis.")
 
 # --- Main chat interface ---
+# --- FIX: Updated welcome message to reflect new workflow ---
 if not st.session_state.messages:
     st.info(
         """
@@ -372,14 +374,9 @@ if not st.session_state.messages:
 
         To get started, upload your data files in the sidebar.
 
-        - **For Prediction & Training:** Upload files to the first two uploaders, then use the `train model` command.
+        - **For Prediction & Training:** Upload files to the first section to use the `train model` command and to run analysis on the training data (e.g., `what are the main drivers of success?`).
 
-        - **For Analysis & Reformatting:** Upload a file to the third uploader ("Analysis & Reformatting"). You can then use commands like:
-          - `show me all the Fintech companies`
-          - `sort the data by Founded Year`
-          - `create a 'Funding per Founder' column`
-          - `compare the means for Total Funding Amount (USD)`
-          - `plot the interaction between Founded Year and Total Funding Amount (USD)`
+        - **For Reformatting:** Upload a file to the second section ("Reformatting") to perform standalone tasks like sorting, filtering, or creating new columns (e.g., `show me all the Fintech companies`).
 
         Just type your command in the chat box below!
         """
@@ -400,19 +397,20 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
         
         # --- FIX: Clearer logic for determining which dataframe to use ---
         context_df = None
-        is_training_command = "train" in prompt or "predict" in prompt
+        is_training_command = "train" in prompt
+        is_analysis_command = any(keyword in prompt for keyword in ["drivers", "correlation", "heatmap", "compare", "interaction"])
         
-        if is_training_command:
+        if is_training_command or is_analysis_command:
             if st.session_state.training_data is not None:
                 context_df = st.session_state.training_data
             else:
-                st.warning("Please upload Training Data to run the model.")
+                st.warning("Please upload Training Data to run the model or perform analysis.")
                 st.stop()
-        else:
+        else: # Reformatting commands
             if st.session_state.analysis_data is not None:
                 context_df = st.session_state.analysis_data
             else:
-                st.warning("Please upload a file in the 'Analysis & Reformatting' section to perform this action.")
+                st.warning("Please upload a file in the 'Reformatting' section to perform this action.")
                 st.stop()
         
         with st.spinner("🧠 AI is thinking..."):
@@ -432,16 +430,8 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
             elif is_code:
                 st.code(cleaned_response, language="python")
                 
-                # Determine which dataframe to pass to exec
-                exec_df = None
-                if is_training_command:
-                    # Training commands don't need a df passed directly, they use session state
-                    exec_df = None 
-                else:
-                    exec_df = context_df.copy()
-
                 local_vars = {
-                    "df": exec_df, "px": px, "go": go,
+                    "df": context_df.copy(), "px": px, "go": go,
                     "train_and_score": train_and_score, 
                     "get_feature_importance_plot": get_feature_importance_plot,
                     "plot_correlation_heatmap": plot_correlation_heatmap,
@@ -464,7 +454,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
                         # Update the analysis dataframe if it was changed
                         st.session_state.analysis_data = local_vars['df']
-                        response_content = "✅ Data reformatting successful! The 'Analysis & Reformatting' data has been updated."
+                        response_content = "✅ Data reformatting successful! The 'Reformatting' data has been updated."
                         st.dataframe(st.session_state.analysis_data.head())
 
                     st.markdown(response_content)
