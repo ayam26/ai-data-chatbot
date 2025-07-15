@@ -40,7 +40,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- Updated system prompt with Data Reformatting Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -336,6 +335,7 @@ if "training_data" not in st.session_state: st.session_state.training_data = Non
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
+if "active_data" not in st.session_state: st.session_state.active_data = "Training"
 
 with st.sidebar:
     st.header("1. Upload Data")
@@ -351,7 +351,21 @@ with st.sidebar:
             all_cols = st.session_state.training_data.columns.tolist()
             st.session_state.column_mapping = get_column_mapping(model, all_cols)
         
-        # --- NEW: Data Health Check Dashboard ---
+    predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
+    if predict_file:
+        with st.spinner("Processing your file..."):
+            df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
+            st.session_state.prediction_data = full_data_prep(df_raw)
+            st.success(f"Loaded and prepared '{predict_file.name}'.")
+
+    # --- NEW: Active Data Selector ---
+    if st.session_state.training_data is not None:
+        st.header("2. Analysis Target")
+        options = ["Training Data"]
+        if st.session_state.prediction_data is not None:
+            options.append("Prediction Data")
+        st.session_state.active_data = st.radio("Choose data to analyze, sort, or filter:", options)
+
         st.subheader("Data Health Check")
         with st.expander("View Cleaned Data Preview"):
             st.dataframe(st.session_state.training_data.head())
@@ -361,13 +375,6 @@ with st.sidebar:
         st.subheader("AI Column Role Analysis")
         st.json(st.session_state.column_mapping)
 
-
-    predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"])
-    if predict_file:
-        with st.spinner("Processing your file..."):
-            df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
-            st.session_state.prediction_data = full_data_prep(df_raw)
-            st.success(f"Loaded and prepared '{predict_file.name}'.")
 
 # --- Main chat interface ---
 if not st.session_state.messages:
@@ -414,7 +421,13 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
         
         with st.spinner("🧠 AI is thinking..."):
             model = get_ai_model()
-            context_df = st.session_state.training_data
+            
+            # --- NEW: Determine which dataframe to use based on the selector ---
+            if st.session_state.active_data == "Training Data":
+                context_df = st.session_state.training_data
+            else:
+                context_df = st.session_state.prediction_data
+
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
             
             cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
@@ -451,9 +464,13 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_data = local_vars['result_data']
                         response_content = "✅ Here is the result of your query:"
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
-                        st.session_state.training_data = local_vars['df']
-                        response_content = "✅ Data reformatting successful! The data has been updated."
-                        st.dataframe(st.session_state.training_data.head())
+                        # --- NEW: Update the correct dataframe based on the selector ---
+                        if st.session_state.active_data == "Training Data":
+                            st.session_state.training_data = local_vars['df']
+                        else:
+                            st.session_state.prediction_data = local_vars['df']
+                        response_content = f"✅ Data reformatting successful! The '{st.session_state.active_data}' has been updated."
+                        st.dataframe(local_vars['df'].head())
 
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
