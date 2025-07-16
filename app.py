@@ -44,6 +44,10 @@ def get_ai_response(model, prompt, df_columns):
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
+    **Data Reformatting Mode**:
+    - If the prompt is to "create", "make", or "generate" a new column, generate the pandas command and assign the modified dataframe back to `df`.
+    - If the prompt is to "sort", "filter", "show", or "display" a subset of data, generate the pandas command and assign the result to a variable named `result_data`.
+
     **Modeling & Analysis:**
     - To "train model" or "predict", generate `results_df, message = train_and_score()`.
     - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
@@ -60,7 +64,8 @@ def get_ai_response(model, prompt, df_columns):
     - The dataframe is ALWAYS named `df`.
 
     **Examples:**
-    - User: "Compare the Total Funding Amount (USD) for exited vs non-exited companies." -> AI: `fig = plot_comparison_boxplot(y_col='Total Funding Amount (USD)')`
+    - User: "create a 'Funding per Founder' column" -> AI: `df = df.assign(FundingPerFounder=df['Total Funding Amount (USD)'] / df['Number of Founders'])`
+    - User: "show me all the Fintech companies" -> AI: `result_data = df[df['Top Industry'] == 'Fintech']`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -335,10 +340,11 @@ if "column_mapping" not in st.session_state: st.session_state.column_mapping = N
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 
 with st.sidebar:
+    # --- FIX: Simplified to a single, unified workflow ---
     st.header("1. Upload Data")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
     if train_file:
-        with st.spinner("Processing your file... This may take a moment."):
+        with st.spinner("Processing Training Data..."):
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
@@ -348,7 +354,6 @@ with st.sidebar:
             all_cols = st.session_state.training_data.columns.tolist()
             st.session_state.column_mapping = get_column_mapping(model, all_cols)
         
-        # --- NEW: Data Health Check Dashboard ---
         st.subheader("Data Health Check")
         with st.expander("View Cleaned Data Preview"):
             st.dataframe(st.session_state.training_data.head())
@@ -358,16 +363,16 @@ with st.sidebar:
         st.subheader("AI Column Role Analysis")
         st.json(st.session_state.column_mapping)
 
-
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
     if predict_file:
-        with st.spinner("Processing your file..."):
+        with st.spinner("Processing Prediction Data..."):
             df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
 # --- Main chat interface ---
 if not st.session_state.messages:
+    # --- FIX: Updated welcome message for the unified workflow ---
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
