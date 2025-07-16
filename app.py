@@ -31,7 +31,6 @@ def get_ai_model():
             st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
             st.stop()
         genai.configure(api_key=api_key)
-        # --- FIX: Reverted to use the gemini-2.5-flash model as per user's API access ---
         return genai.GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
@@ -336,32 +335,19 @@ st.caption("With fully automatic column mapping and advanced driver analysis.")
 if "messages" not in st.session_state: st.session_state.messages = []
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
+if "analysis_data" not in st.session_state: st.session_state.analysis_data = None # New state for analysis
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 
 with st.sidebar:
-    # --- FIX: Simplified to a single, unified workflow ---
-    st.header("1. Upload Data")
+    # --- FIX: Re-architected sidebar for clarity ---
+    st.header("1. Prediction & Training Files")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
     if train_file:
         with st.spinner("Processing Training Data..."):
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{train_file.name}'.")
-
-            # --- Automatically get column mapping after cleaning ---
-            model = get_ai_model()
-            all_cols = st.session_state.training_data.columns.tolist()
-            st.session_state.column_mapping = get_column_mapping(model, all_cols)
-        
-        st.subheader("Data Health Check")
-        with st.expander("View Cleaned Data Preview"):
-            st.dataframe(st.session_state.training_data.head())
-            st.write("**Data Types:**")
-            st.dataframe(st.session_state.training_data.dtypes.astype(str))
-        
-        st.subheader("AI Column Role Analysis")
-        st.json(st.session_state.column_mapping)
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
     if predict_file:
@@ -370,25 +356,39 @@ with st.sidebar:
             st.session_state.prediction_data = full_data_prep(df_raw)
             st.success(f"Loaded and prepared '{predict_file.name}'.")
 
+    # --- FIX: Changed header to 'Reformatting' ---
+    st.header("2. Reformatting")
+    analysis_file = st.file_uploader("Upload a file to sort, filter, or reformat", type=["xlsx", "csv"], key="analysis")
+    if analysis_file:
+        with st.spinner("Loading Analysis Data..."):
+            df_raw = pd.read_csv(analysis_file, na_values=['—']) if analysis_file.name.endswith('.csv') else pd.read_excel(analysis_file, na_values=['—'])
+            st.session_state.analysis_data = full_data_prep(df_raw)
+            st.success(f"Loaded '{analysis_file.name}' for analysis.")
+
 # --- Main chat interface ---
+# --- FIX: Updated welcome message to reflect new workflow ---
 if not st.session_state.messages:
-    # --- FIX: Updated welcome message for the unified workflow ---
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
 
-        To get started, upload your `Training Data` and `Prediction Data` in the sidebar. 
-        The app will automatically clean and prepare your files. 
-        
-        Once loaded, you can use commands like:
+        To get started, upload your data files in the sidebar.
 
-        - **`train model`**: To train the predictor and score your new companies.
-        - **`what are the main drivers of success?`**: To see which factors are most important.
-        - **`show me the correlation heatmap`**: To visualize how numerical features relate.
-        - **`compare the means for Total Funding Amount (USD)`**: To compare a metric for exited vs. non-exited companies.
-        - **`plot the interaction between Founded Year and Total Funding Amount (USD)`**: To see how two variables interact.
-        - **`show me all the Fintech companies`**: To filter and view your data.
-        - **`create a 'Funding per Founder' column`**: To engineer new features.
+        ### **1. Prediction & Training**
+        Upload files to this section to train the predictive model and analyze the results. All commands in this section apply to the **Training Data**.
+        - **`train model`**: Trains the model and scores the companies in your Prediction Data file.
+        - **`what are the main drivers of success?`**: Shows a chart of the most important factors the model learned.
+        - **`show me the correlation heatmap`**: Creates a heatmap of all numerical columns.
+        - **`compare the means for Total Funding Amount (USD)`**: Creates a box plot comparing a metric for exited vs. non-exited companies.
+        - **`plot the interaction between Founded Year and Total Funding Amount (USD)`**: Creates a scatter plot to see how two variables relate.
+
+        ### **2. Reformatting**
+        Upload a file here for general-purpose data manipulation. All commands in this section apply to the **Reformatting** file.
+        - **`show me all the Fintech companies`**: Filters the data to show only rows where the 'Top Industry' is 'Fintech'.
+        - **`sort the data by Founded Year`**: Sorts the entire spreadsheet by the 'Founded Year' column.
+        - **`create a 'Funding per Founder' column`**: Creates a new column by dividing 'Total Funding Amount (USD)' by 'Number of Founders'.
+
+        Just type your command in the chat box below!
         """
     )
 
@@ -405,12 +405,23 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
 
     with st.chat_message("assistant"):
         
-        if st.session_state.training_data is None:
-            st.warning("Please upload at least a training file first.")
-            st.stop()
+        # --- FIX: Clearer logic for determining which dataframe to use ---
+        context_df = None
+        is_training_command = "train" in prompt
+        is_analysis_command = any(keyword in prompt for keyword in ["drivers", "correlation", "heatmap", "compare", "interaction"])
         
-        # All commands now operate on the training data by default
-        context_df = st.session_state.training_data
+        if is_training_command or is_analysis_command:
+            if st.session_state.training_data is not None:
+                context_df = st.session_state.training_data
+            else:
+                st.warning("Please upload Training Data to run the model or perform analysis.")
+                st.stop()
+        else: # Reformatting commands
+            if st.session_state.analysis_data is not None:
+                context_df = st.session_state.analysis_data
+            else:
+                st.warning("Please upload a file in the 'Reformatting' section to perform this action.")
+                st.stop()
         
         with st.spinner("🧠 AI is thinking..."):
             model = get_ai_model()
@@ -451,10 +462,10 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_data = local_vars['result_data']
                         response_content = "✅ Here is the result of your query:"
                     elif 'df' in local_vars and not context_df.equals(local_vars['df']):
-                        # Update the training dataframe if it was changed
-                        st.session_state.training_data = local_vars['df']
-                        response_content = "✅ Data reformatting successful! The 'Training Data' has been updated."
-                        st.dataframe(st.session_state.training_data.head())
+                        # Update the analysis dataframe if it was changed
+                        st.session_state.analysis_data = local_vars['df']
+                        response_content = "✅ Data reformatting successful! The 'Reformatting' data has been updated."
+                        st.dataframe(st.session_state.analysis_data.head())
 
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
