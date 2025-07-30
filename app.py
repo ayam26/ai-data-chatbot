@@ -114,8 +114,13 @@ def train_and_score():
 
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected in the sidebar."
+        
+    # --- FIX: Remove rows where the target variable is missing ---
+    df_train.dropna(subset=[target], inplace=True)
+    if df_train.empty:
+        return None, f"ERROR: After removing rows with missing '{target}' values, the training dataset is empty."
 
-    # --- FIX: Use robust, hard-coded feature lists ---
+    # Use robust, hard-coded feature lists
     numeric_features = [
         'Year Since Founding', 'Market Presence', 'LTM Revenue', 'Gross Margin', 
         'EBITDA Margin', 'Profitable', 'Number of Funding Rounds', 
