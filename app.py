@@ -142,10 +142,14 @@ def train_and_score():
     for col in categorical_features:
         df_train[col] = df_train[col].astype(str).fillna('Unknown')
 
+    # --- FIX: Ensure text features are also uniformly strings ---
+    for col in text_features:
+        df_train[col] = df_train[col].astype(str).fillna('')
+
     # --- FIX: Handle empty text columns ---
     non_empty_text_features = []
     for col in text_features:
-        if col in df_train.columns and df_train[col].astype(str).str.strip().astype(bool).any():
+        if col in df_train.columns and df_train[col].str.strip().astype(bool).any():
             non_empty_text_features.append(col)
     
     if len(non_empty_text_features) < len(text_features):
