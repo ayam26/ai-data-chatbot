@@ -120,41 +120,23 @@ def train_and_score():
     if df_train.empty:
         return None, f"ERROR: After removing rows with missing '{target}' values, the training dataset is empty."
 
-    # --- FIX: Use robust, hard-coded feature lists for reliability ---
-    numeric_features = [
-        'Year Since Founding', 'Market Presence', 'LTM Revenue', 'Gross Margin', 
-        'EBITDA Margin', 'Profitable', 'Number of Funding Rounds', 
-        'Year Since Last Funding Date', 'Last Funding Amount', 'Last Round Valuation', 
-        'Valuation Step-Up', 'Revenue Multiple', 'EBITDA Multiple', 
-        'Revene and EBITDA Multiple Difference', 'Total Funding Amount', 
-        'Quality of Investors', 'Number of Founders', 'Founder Experience', 
-        'Leadership Bench Strength', 'Number of Competitors', 'Competitor Advantage', 
-        'Tech Defensibility', 'Total Equity Funding Amount'
-    ]
-    categorical_features = [
-        'Headquarters Location', 'Industries', 'Business Model', 
-        'Revenue Growth Rate', 'Last Funding Type'
-    ]
-    text_features = ['Top 5 Investors']
-
-    # Pre-process columns to ensure correct data types
-    for col in numeric_features:
-        if col in df_train.columns:
-            df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
-        else:
-            df_train[col] = np.nan
+    # --- NEW: Dynamic Feature Identification ---
+    special_cols = [c for c in mapping.values() if c != "N/A"] + [target]
     
-    for col in categorical_features:
-        if col in df_train.columns:
-            df_train[col] = df_train[col].astype(str).fillna('Unknown')
+    numeric_features = df_train.select_dtypes(include=np.number).columns.drop(target, errors='ignore').tolist()
+    
+    object_cols = df_train.select_dtypes(include=['object', 'category']).columns.tolist()
+    
+    text_features = []
+    categorical_features = []
+    for col in object_cols:
+        if col in special_cols:
+            continue
+        # Heuristic: if a column has many unique values, treat as text, otherwise categorical
+        if df_train[col].nunique() / len(df_train) > 0.5:
+            text_features.append(col)
         else:
-            df_train[col] = 'Unknown'
-
-    for col in text_features:
-        if col in df_train.columns:
-            df_train[col] = df_train[col].astype(str).fillna('')
-        else:
-            df_train[col] = ''
+            categorical_features.append(col)
 
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
@@ -164,11 +146,15 @@ def train_and_score():
         if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
         else: df_predict[col] = np.nan
     for col in categorical_features:
-        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
-        else: df_predict[col] = 'Unknown'
+        if col in df_predict.columns:
+            df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+        else:
+            df_predict[col] = 'Unknown'
     for col in text_features:
-        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
-        else: df_predict[col] = ''
+        if col in df_predict.columns:
+            df_predict[col] = df_predict[col].astype(str).fillna('')
+        else:
+            df_predict[col] = ''
 
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
     categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
