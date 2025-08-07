@@ -41,6 +41,7 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
+    # --- NEW: Added Prediction Explanation Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -141,10 +142,6 @@ def train_and_score():
             
     for col in categorical_features:
         df_train[col] = df_train[col].astype(str).fillna('Unknown')
-
-    # --- FIX: Ensure text features are also uniformly strings ---
-    for col in text_features:
-        df_train[col] = df_train[col].astype(str).fillna('')
 
     non_empty_text_features = []
     for col in text_features:
