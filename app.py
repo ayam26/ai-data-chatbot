@@ -11,10 +11,11 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 import plotly.express as px
 import plotly.graph_objects as go
+import shap
 
 # --- Suppress specific, harmless warnings ---
 warnings.filterwarnings("ignore", message="Skipping features without any observed values")
@@ -43,13 +44,10 @@ def get_ai_response(model, prompt, df_columns):
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
-    **Data Reformatting Mode**:
-    - If the prompt is to "create", "make", or "generate" a new column, generate the pandas command and assign the modified dataframe back to `df`.
-    - If the prompt is to "sort", "filter", "show", or "display" a subset of data, generate the pandas command and assign the result to a variable named `result_data`.
-
     **Modeling & Analysis:**
     - To "train model" or "predict", generate `results_df, message = train_and_score()`.
     - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
+    - To "explain the score for" a specific company, generate `fig = explain_single_prediction(company_name='Company Name')`, extracting the company name from the prompt.
     - To "show correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
     - To "compare means" or "compare distributions", call `fig = plot_comparison_boxplot(y_col='column_name')`.
     - To see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`.
@@ -63,8 +61,7 @@ def get_ai_response(model, prompt, df_columns):
     - The dataframe is ALWAYS named `df`.
 
     **Examples:**
-    - User: "create a 'Funding per Founder' column" -> AI: `df = df.assign(FundingPerFounder=df['Total Funding Amount (USD)'] / df['Number of Founders'])`
-    - User: "show me all the Fintech companies" -> AI: `result_data = df[df['Top Industry'] == 'Fintech']`
+    - User: "explain the score for FutureTech" -> AI: `fig = explain_single_prediction(company_name='FutureTech')`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -95,102 +92,17 @@ def get_column_mapping(_model, columns):
 
 
 # --- Data Processing and Modeling ---
-def convert_to_usd(value):
-    """A robust function to convert a single currency string to a float."""
-    if pd.isna(value):
-        return np.nan
-    
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    if not isinstance(value, str):
-        return np.nan
-
-    exchange_rates = {
-        '₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66,
-        'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070,
-        'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0
-    }
-    
-    value_cleaned = value.strip().replace(',', '')
-    
-    if value_cleaned in ['-', '—', 'Undisclosed']:
-        return np.nan
-    
-    if '-' in value_cleaned:
-        value_cleaned = value_cleaned.split('-')[0].strip()
-
-    multiplier = 1.0
-    if 'B' in value_cleaned.upper():
-        multiplier = 1_000_000_000
-    elif 'M' in value_cleaned.upper():
-        multiplier = 1_000_000
-    elif 'K' in value_cleaned.upper():
-        multiplier = 1_000
-    
-    numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
-    if not numeric_part_str:
-        return np.nan
-    
-    try:
-        numeric_value = float(numeric_part_str)
-    except (ValueError, TypeError):
-        return np.nan
-    
-    rate = 1.0
-    for symbol, r in exchange_rates.items():
-        if symbol != '$' and symbol in value_cleaned:
-            rate = r
-            break
-    
-    return numeric_value * multiplier * rate
-
-# --- FIX: Restored the full_data_prep function ---
 def full_data_prep(df):
     """
     Loads a dataframe and performs all cleaning and feature engineering.
     """
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
-
-    # 1. Clean Headquarters Location
-    if 'Headquarters Location' in df.columns:
-        df['Headquarters Country'] = df['Headquarters Location'].apply(lambda loc: loc.split(',')[-1].strip() if isinstance(loc, str) else 'Unknown')
-
-    # 2. Create Top Industry
-    industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
-    industry_map = {'Artificial Intelligence (AI)': 'AI', 'FinTech': 'Fintech', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
-    def get_top_industry(row):
-        combined_industries = f"{row.get('Industry Groups', '')} {row.get('Industries', '')}"
-        for industry in industry_priority:
-            if re.search(r'\b' + re.escape(industry) + r'\b', combined_industries, re.IGNORECASE): return industry
-        for term, top_industry in industry_map.items():
-            if term in combined_industries: return top_industry
-        return 'Other'
-    df['Top Industry'] = df.apply(get_top_industry, axis=1)
-
-    # 3. Clean Date Columns
-    if 'Founded Date' in df.columns:
-        df['Founded Year'] = pd.to_numeric(df['Founded Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
-    if 'Exit Date' in df.columns:
-        df['Exit Year'] = pd.to_numeric(df['Exit Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
-
-    # 4. Convert all monetary data to USD
-    money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
-    for col in money_cols:
-        if col in df.columns:
-            new_col_name = f"{col} (USD)"
-            df[new_col_name] = df[col].apply(convert_to_usd)
-            df[new_col_name] = df[new_col_name].fillna(0)
-
-    # 5. Create the final 'Exit' column
-    if 'Exit' not in df.columns and 'Exit Date' in df.columns and 'Funding Status' in df.columns:
-        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or row['Funding Status'] in ['M&A', 'IPO'] else 0.0, axis=1)
-    
+    # Basic cleaning is enough, the model pipeline will handle the rest
     return df
 
 def train_and_score():
-    """Trains the model using the pre-defined robust feature set."""
+    """Dynamically identifies features and trains the model based on user-confirmed column mappings."""
     if 'training_data' not in st.session_state or st.session_state.training_data is None:
         return None, "ERROR: Training data has not been uploaded."
     if 'prediction_data' not in st.session_state or st.session_state.prediction_data is None:
@@ -199,40 +111,61 @@ def train_and_score():
     df_train = st.session_state.training_data.copy()
     df_predict = st.session_state.prediction_data.copy()
     
-    if 'column_mapping' not in st.session_state or st.session_state.column_mapping is None:
-        model = get_ai_model()
-        st.session_state.column_mapping = get_column_mapping(model, df_train.columns.tolist())
-
     mapping = st.session_state.column_mapping
     target = mapping['TARGET_VARIABLE']
 
     if target == "N/A" or target not in df_train.columns:
-        return None, "ERROR: A valid 'Target Variable' must be identified or selected."
+        return None, "ERROR: A valid 'Target Variable' must be selected in the sidebar."
+        
+    df_train.dropna(subset=[target], inplace=True)
+    if df_train.empty:
+        return None, f"ERROR: After removing rows with missing '{target}' values, the training dataset is empty."
 
-    numeric_features = ['Founded Year', 'Number of Founders', 'Number of Funding Rounds', 'Total Equity Funding Amount (USD)', 'Total Funding Amount (USD)']
-    categorical_features = ['Headquarters Country', 'Top Industry', 'Funding Status', 'Last Funding Type']
-    text_features = ['Description', 'Top 5 Investors']
-
-    for col in numeric_features:
-        if col in df_train.columns: df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
-        else: df_train[col] = np.nan
+    special_cols = [c for c in mapping.values() if c != "N/A"] + [target]
+    
+    numeric_features = df_train.select_dtypes(include=np.number).columns.drop(target, errors='ignore').tolist()
+    
+    object_cols = df_train.select_dtypes(include=['object', 'category']).columns.tolist()
+    
+    text_features = []
+    categorical_features = []
+    for col in object_cols:
+        if col in special_cols:
+            continue
+        if df_train[col].nunique() / len(df_train) > 0.5:
+            text_features.append(col)
+        else:
+            categorical_features.append(col)
+            
     for col in categorical_features:
-        if col in df_train.columns: df_train[col] = df_train[col].astype(str).fillna('Unknown')
-        else: df_train[col] = 'Unknown'
+        df_train[col] = df_train[col].astype(str).fillna('Unknown')
+
+    non_empty_text_features = []
     for col in text_features:
-        if col in df_train.columns: df_train[col] = df_train[col].astype(str).fillna('')
-        else: df_train[col] = ''
+        if col in df_train.columns and df_train[col].str.strip().astype(bool).any():
+            non_empty_text_features.append(col)
+    
+    if len(non_empty_text_features) < len(text_features):
+        st.warning("One or more text columns were found to be empty and will be excluded from the model.")
+        text_features = non_empty_text_features
 
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
+    for col in numeric_features:
+        if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
+        else: df_predict[col] = np.nan
+    for col in categorical_features:
+        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
+        else: df_predict[col] = 'Unknown'
+    for col in text_features:
+        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
+        else: df_predict[col] = ''
+
     numeric_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='median')), ('scaler', StandardScaler())])
     categorical_transformer = Pipeline(steps=[('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')), ('onehot', OneHotEncoder(handle_unknown='ignore'))])
     
-    text_transformers = [
-        ('text_Description', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Description'),
-        ('text_Investors', TfidfVectorizer(stop_words='english', max_features=50, ngram_range=(1,2)), 'Top 5 Investors')
-    ]
+    text_transformers = [(f'text_{col}', TfidfVectorizer(stop_words='english', max_features=50), col) for col in text_features]
 
     preprocessor = ColumnTransformer(transformers=[('num', numeric_transformer, numeric_features), ('cat', categorical_transformer, categorical_features)] + text_transformers, remainder='drop')
     model = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', RandomForestClassifier(n_estimators=150, random_state=42, class_weight='balanced', oob_score=True))])
@@ -245,15 +178,6 @@ def train_and_score():
     accuracy = model.named_steps['classifier'].oob_score_
     message = f"✅ Model trained with an estimated accuracy of {accuracy:.2%}. You can now score the prediction data or analyze feature importance."
     
-    for col in numeric_features:
-        if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
-        else: df_predict[col] = np.nan
-    for col in categorical_features:
-         if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('Unknown')
-         else: df_predict[col] = 'Unknown'
-    for col in text_features:
-        if col in df_predict.columns: df_predict[col] = df_predict[col].astype(str).fillna('')
-        else: df_predict[col] = ''
     X_predict = df_predict.drop(columns=[target], errors='ignore')
     probabilities = model.predict_proba(X_predict)[:, 1]
     org_name_col = mapping['ORGANIZATION_IDENTIFIER']
@@ -281,15 +205,75 @@ def get_feature_importance_plot():
         return None
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
     
-    importance_df['Feature'] = importance_df['Feature'].str.replace('num__', '')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('cat__', '')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Description__', 'desc_')
-    importance_df['Feature'] = importance_df['Feature'].str.replace('text_Investors__', 'investor_')
+    importance_df['Feature'] = importance_df['Feature'].str.replace(r'.*__', '', regex=True)
     
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
     fig = px.bar(importance_df, x='Importance', y='Feature', orientation='h', title='Top 20 Drivers of Successful Exits')
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
+
+# --- NEW: Prediction Explanation Function ---
+def explain_single_prediction(company_name):
+    """Generates a SHAP plot to explain the prediction for a single company."""
+    if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
+        st.error("You must train a model first.")
+        return None
+    
+    model = st.session_state.trained_model
+    preprocessor = model.named_steps['preprocessor']
+    classifier = model.named_steps['classifier']
+    
+    df_predict = st.session_state.prediction_data.copy()
+    mapping = st.session_state.column_mapping
+    id_col = mapping['ORGANIZATION_IDENTIFIER']
+    
+    company_row = df_predict[df_predict[id_col] == company_name]
+    if company_row.empty:
+        st.error(f"Company '{company_name}' not found in the prediction data.")
+        return None
+
+    # --- FIX: Apply the same data type conversions as in train_and_score ---
+    features = st.session_state.model_features
+    for col in features['numeric']:
+        if col in company_row.columns: company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+    for col in features['categorical']:
+        if col in company_row.columns: company_row[col] = company_row[col].astype(str).fillna('Unknown')
+    for col in features['text']:
+        if col in company_row.columns: company_row[col] = company_row[col].astype(str).fillna('')
+    # --- End Fix ---
+
+    # Transform the single row of data
+    transformed_row = preprocessor.transform(company_row)
+    feature_names = preprocessor.get_feature_names_out()
+
+    # Create the SHAP explainer
+    explainer = shap.TreeExplainer(classifier)
+    shap_values = explainer.shap_values(transformed_row)
+
+    # Create a DataFrame for plotting
+    shap_df = pd.DataFrame({
+        'Feature': feature_names,
+        'SHAP Value': shap_values[1][0] # Index 1 for the "Success" class
+    })
+    shap_df['Feature'] = shap_df['Feature'].str.replace(r'.*__', '', regex=True)
+    shap_df['Color'] = ['red' if v < 0 else 'green' for v in shap_df['SHAP Value']]
+    shap_df = shap_df.reindex(shap_df['SHAP Value'].abs().sort_values(ascending=True).index).tail(15)
+
+    # Create the plot
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=shap_df['SHAP Value'],
+        y=shap_df['Feature'],
+        orientation='h',
+        marker_color=shap_df['Color']
+    ))
+    fig.update_layout(
+        title=f"Prediction Drivers for {company_name}",
+        xaxis_title="SHAP Value (Impact on Success Probability)",
+        yaxis_title="Feature"
+    )
+    return fig
+
 
 def plot_correlation_heatmap():
     """Calculates and plots a heatmap of correlations for numeric features."""
@@ -336,50 +320,63 @@ st.caption("With fully automatic column mapping and advanced driver analysis.")
 if "messages" not in st.session_state: st.session_state.messages = []
 if "training_data" not in st.session_state: st.session_state.training_data = None
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
-if "analysis_data" not in st.session_state: st.session_state.analysis_data = None # New state for analysis
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 
 with st.sidebar:
-    # --- FIX: Re-architected sidebar for clarity ---
-    st.header("1. Prediction & Training Files")
+    st.header("1. Upload Data")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
     if train_file:
         with st.spinner("Processing Training Data..."):
             df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
             st.session_state.training_data = full_data_prep(df_raw)
-            st.success(f"Loaded and prepared '{train_file.name}'.")
+            st.success(f"Loaded '{train_file.name}'.")
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
     if predict_file:
         with st.spinner("Processing Prediction Data..."):
             df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
             st.session_state.prediction_data = full_data_prep(df_raw)
-            st.success(f"Loaded and prepared '{predict_file.name}'.")
+            st.success(f"Loaded '{predict_file.name}'.")
 
-    # --- FIX: Changed header to 'Reformatting' ---
-    st.header("2. Reformatting")
-    analysis_file = st.file_uploader("Upload a file to sort, filter, or reformat", type=["xlsx", "csv"], key="analysis")
-    if analysis_file:
-        with st.spinner("Loading Analysis Data..."):
-            df_raw = pd.read_csv(analysis_file, na_values=['—']) if analysis_file.name.endswith('.csv') else pd.read_excel(analysis_file, na_values=['—'])
-            st.session_state.analysis_data = full_data_prep(df_raw)
-            st.success(f"Loaded '{analysis_file.name}' for analysis.")
+    if st.session_state.training_data is not None:
+        st.header("2. Confirm Column Roles")
+        st.info("Our AI suggests roles for your columns. Please confirm or correct them.")
+        
+        all_cols = ["N/A"] + st.session_state.training_data.columns.tolist()
+        
+        if st.session_state.column_mapping is None:
+            model = get_ai_model()
+            st.session_state.column_mapping = get_column_mapping(model, all_cols[1:])
+
+        mapping = st.session_state.column_mapping
+        
+        def get_index(key):
+            return all_cols.index(mapping.get(key, "N/A")) if mapping.get(key) in all_cols else 0
+
+        mapping['TARGET_VARIABLE'] = st.selectbox("Target Variable (what to predict)", all_cols, index=get_index('TARGET_VARIABLE'))
+        mapping['ORGANIZATION_IDENTIFIER'] = st.selectbox("Organization Identifier (company name)", all_cols, index=get_index('ORGANIZATION_IDENTIFIER'))
+        mapping['TEXT_DESCRIPTION'] = st.selectbox("Text Description Column", all_cols, index=get_index('TEXT_DESCRIPTION'))
+        mapping['CATEGORICAL_INDUSTRY'] = st.selectbox("Categorical Industry Column", all_cols, index=get_index('CATEGORICAL_INDUSTRY'))
+
 
 # --- Main chat interface ---
 if not st.session_state.messages:
-    # --- FIX: Updated welcome message to reflect new workflow ---
     st.info(
         """
         **Welcome to the Autonomous AI Exit Predictor!**
 
-        To get started, upload your data files in the sidebar.
+        To get started, upload your `Training Data` and `Prediction Data` in the sidebar. 
+        Then, confirm the column roles identified by the AI.
+        
+        Once loaded, you can use commands like:
 
-        - **For Prediction & Training:** Upload files to the first section to use the `train model` command and to run analysis on the training data (e.g., `what are the main drivers of success?`).
-
-        - **For Reformatting:** Upload a file to the second section ("Reformatting") to perform standalone tasks like sorting, filtering, or creating new columns (e.g., `show me all the Fintech companies`).
-
-        Just type your command in the chat box below!
+        - **`train model`**: To train the predictor and score your new companies.
+        - **`what are the main drivers of success?`**: To see which factors are most important.
+        - **`show me the correlation heatmap`**: To visualize how numerical features relate.
+        - **`compare the means for Total Funding Amount`**: To compare a metric for exited vs. non-exited companies.
+        - **`plot the interaction between Founded Year and Total Funding Amount`**: To see how two variables interact.
+        - **`explain the score for [Company Name]`**: To see the specific drivers for a single company.
         """
     )
 
@@ -396,23 +393,11 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
 
     with st.chat_message("assistant"):
         
-        # --- FIX: Clearer logic for determining which dataframe to use ---
-        context_df = None
-        is_training_command = "train" in prompt
-        is_analysis_command = any(keyword in prompt for keyword in ["drivers", "correlation", "heatmap", "compare", "interaction"])
+        if st.session_state.training_data is None:
+            st.warning("Please upload at least a training file first.")
+            st.stop()
         
-        if is_training_command or is_analysis_command:
-            if st.session_state.training_data is not None:
-                context_df = st.session_state.training_data
-            else:
-                st.warning("Please upload Training Data to run the model or perform analysis.")
-                st.stop()
-        else: # Reformatting commands
-            if st.session_state.analysis_data is not None:
-                context_df = st.session_state.analysis_data
-            else:
-                st.warning("Please upload a file in the 'Reformatting' section to perform this action.")
-                st.stop()
+        context_df = st.session_state.training_data
         
         with st.spinner("🧠 AI is thinking..."):
             model = get_ai_model()
@@ -422,7 +407,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
             cleaned_response = cleaned_response.replace("`", "")
             cleaned_response = cleaned_response.replace("‘", "'").replace("’", "'")
 
-            code_keywords = ['fig =', 'train_and_score', 'df =', 'result_data =']
+            code_keywords = ['fig =', 'train_and_score', 'df =']
             is_code = any(keyword in cleaned_response for keyword in code_keywords)
 
             if cleaned_response.startswith("ERROR:"):
@@ -437,7 +422,8 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                     "get_feature_importance_plot": get_feature_importance_plot,
                     "plot_correlation_heatmap": plot_correlation_heatmap,
                     "plot_comparison_boxplot": plot_comparison_boxplot,
-                    "plot_interactive_scatter": plot_interactive_scatter
+                    "plot_interactive_scatter": plot_interactive_scatter,
+                    "explain_single_prediction": explain_single_prediction
                 }
                 
                 try:
@@ -449,15 +435,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
                         response_content = f"✅ Here is your analysis for '{prompt}'"
                     elif 'results_df' in local_vars:
                         response_data, response_content = local_vars["results_df"], local_vars["message"]
-                    elif 'result_data' in local_vars:
-                        response_data = local_vars['result_data']
-                        response_content = "✅ Here is the result of your query:"
-                    elif 'df' in local_vars and not context_df.equals(local_vars['df']):
-                        # Update the analysis dataframe if it was changed
-                        st.session_state.analysis_data = local_vars['df']
-                        response_content = "✅ Data reformatting successful! The 'Reformatting' data has been updated."
-                        st.dataframe(st.session_state.analysis_data.head())
-
+                    
                     st.markdown(response_content)
                     if response_data is not None: st.dataframe(response_data)
                     if response_chart is not None: st.plotly_chart(response_chart, use_container_width=True, key="new_chart")
