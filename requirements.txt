@@ -7,3 +7,4 @@ plotly
 textblob
 nltk
 xlsxwriter
+shap
