@@ -32,7 +32,8 @@ def get_ai_model():
             st.error("GEMINI_API_KEY not found. Please set it in your Streamlit secrets.")
             st.stop()
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel('gemini-2.5-flash')
+        # Using a specific, stable model version
+        return genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
         st.stop()
@@ -41,7 +42,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: Added Prediction Explanation Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -135,6 +135,7 @@ def train_and_score():
     for col in object_cols:
         if col in special_cols:
             continue
+        # Heuristic to decide if a column is text or categorical
         if df_train[col].nunique() / len(df_train) > 0.5:
             text_features.append(col)
         else:
@@ -152,9 +153,11 @@ def train_and_score():
         st.warning("One or more text columns were found to be empty and will be excluded from the model.")
         text_features = non_empty_text_features
 
+    # Save identified features to session state for later use
     st.session_state.model_features = {"numeric": numeric_features, "categorical": categorical_features, "text": text_features}
     st.info(f"**Model Features Identified:**\n- **Numeric:** {numeric_features}\n- **Categorical:** {categorical_features}\n- **Text:** {text_features}")
 
+    # Prepare prediction data to match training data structure
     for col in numeric_features:
         if col in df_predict.columns: df_predict[col] = pd.to_numeric(df_predict[col], errors='coerce')
         else: df_predict[col] = np.nan
@@ -181,7 +184,7 @@ def train_and_score():
     accuracy = model.named_steps['classifier'].oob_score_
     message = f"✅ Model trained with an estimated accuracy of {accuracy:.2%}. You can now score the prediction data or analyze feature importance."
     
-    # --- FIX: Save the cleaned prediction data to session state ---
+    # Save the cleaned prediction data to session state for explainability
     st.session_state.prediction_data_cleaned = df_predict.copy()
 
     X_predict = df_predict.drop(columns=[target], errors='ignore')
@@ -211,6 +214,7 @@ def get_feature_importance_plot():
         return None
     importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
     
+    # Clean up feature names for better readability
     importance_df['Feature'] = importance_df['Feature'].str.replace(r'.*__', '', regex=True)
     
     importance_df = importance_df.sort_values(by='Importance', ascending=False).head(20)
@@ -218,14 +222,12 @@ def get_feature_importance_plot():
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
 
-# --- NEW: Prediction Explanation Function ---
 def explain_single_prediction(company_name):
     """Generates a SHAP plot to explain the prediction for a single company."""
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
     
-    # --- FIX: Use the cleaned prediction data from session state ---
     if 'prediction_data_cleaned' not in st.session_state:
         st.error("Please run the 'train model' command first to generate scores.")
         return None
@@ -238,14 +240,27 @@ def explain_single_prediction(company_name):
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
-    company_row = df_predict[df_predict[id_col] == company_name]
+    company_row = df_predict[df_predict[id_col] == company_name].copy()
     if company_row.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # Data is already cleaned, so we can transform directly
-    transformed_row = preprocessor.transform(company_row)
-    feature_names = preprocessor.get_feature_names_out()
+    # --- FIX: Explicitly ensure correct dtypes for the single row ---
+    # This prevents the "Cannot cast ufunc 'isnan'..." error by making sure
+    # numeric columns are actually numeric before transformation.
+    if 'model_features' in st.session_state:
+        numeric_features = st.session_state.model_features['numeric']
+        for col in numeric_features:
+            if col in company_row.columns:
+                company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+    # --- END FIX ---
+
+    try:
+        transformed_row = preprocessor.transform(company_row)
+        feature_names = preprocessor.get_feature_names_out()
+    except Exception as e:
+        st.error(f"Failed to transform data for explanation: {e}")
+        return None
 
     # Create the SHAP explainer
     explainer = shap.TreeExplainer(classifier)
@@ -258,6 +273,7 @@ def explain_single_prediction(company_name):
     })
     shap_df['Feature'] = shap_df['Feature'].str.replace(r'.*__', '', regex=True)
     shap_df['Color'] = ['red' if v < 0 else 'green' for v in shap_df['SHAP Value']]
+    # Get the top 15 features with the largest impact (absolute SHAP value)
     shap_df = shap_df.reindex(shap_df['SHAP Value'].abs().sort_values(ascending=True).index).tail(15)
 
     # Create the plot
@@ -323,22 +339,31 @@ if "training_data" not in st.session_state: st.session_state.training_data = Non
 if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
+if "model_features" not in st.session_state: st.session_state.model_features = None
 
 with st.sidebar:
     st.header("1. Upload Data")
     train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
     if train_file:
         with st.spinner("Processing Training Data..."):
-            df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
-            st.session_state.training_data = full_data_prep(df_raw)
-            st.success(f"Loaded '{train_file.name}'.")
+            try:
+                df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
+                st.session_state.training_data = full_data_prep(df_raw)
+                st.success(f"Loaded '{train_file.name}'.")
+            except Exception as e:
+                st.error(f"Error reading training file: {e}")
+
 
     predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
     if predict_file:
         with st.spinner("Processing Prediction Data..."):
-            df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
-            st.session_state.prediction_data = full_data_prep(df_raw)
-            st.success(f"Loaded '{predict_file.name}'.")
+            try:
+                df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
+                st.session_state.prediction_data = full_data_prep(df_raw)
+                st.success(f"Loaded '{predict_file.name}'.")
+            except Exception as e:
+                st.error(f"Error reading prediction file: {e}")
+
 
     if st.session_state.training_data is not None:
         st.header("2. Confirm Column Roles")
@@ -353,7 +378,11 @@ with st.sidebar:
         mapping = st.session_state.column_mapping
         
         def get_index(key):
-            return all_cols.index(mapping.get(key, "N/A")) if mapping.get(key) in all_cols else 0
+            # Safely get the index, defaulting to 0 ('N/A') if not found
+            try:
+                return all_cols.index(mapping.get(key, "N/A"))
+            except ValueError:
+                return 0
 
         mapping['TARGET_VARIABLE'] = st.selectbox("Target Variable (what to predict)", all_cols, index=get_index('TARGET_VARIABLE'))
         mapping['ORGANIZATION_IDENTIFIER'] = st.selectbox("Organization Identifier (company name)", all_cols, index=get_index('ORGANIZATION_IDENTIFIER'))
@@ -404,6 +433,7 @@ if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
             model = get_ai_model()
             ai_response = get_ai_response(model, prompt, list(context_df.columns))
             
+            # Clean the response to get executable code
             cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
             cleaned_response = cleaned_response.replace("`", "")
             cleaned_response = cleaned_response.replace("‘", "'").replace("’", "'")
