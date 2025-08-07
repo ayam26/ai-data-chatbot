@@ -232,8 +232,8 @@ def explain_single_prediction(company_name):
         st.error("You must train a model first.")
         return None
     
-    if 'prediction_data_cleaned' not in st.session_state:
-        st.error("Please run the 'train model' command first to generate scores.")
+    if 'prediction_data' not in st.session_state:
+        st.error("Please upload prediction data first.")
         return None
 
     # These must exist if the above checks pass
@@ -242,7 +242,8 @@ def explain_single_prediction(company_name):
     classifier = model.named_steps['classifier']
     model_features = st.session_state.model_features
     
-    df_predict = st.session_state.prediction_data_cleaned.copy()
+    # Use the original, uncleaned prediction data to be safe
+    df_predict = st.session_state.prediction_data.copy()
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
@@ -252,38 +253,41 @@ def explain_single_prediction(company_name):
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # --- FINAL ROBUST FIX v2: The order of operations is critical ---
+    # --- BULLETPROOF FIX: Recreate the exact data preparation steps ---
     # 1. Get the column order the model was trained on
     model_columns = st.session_state.get('model_column_order')
     if not model_columns:
         st.error("Model column order not found. Please retrain the model to use this feature.")
         return None
         
-    # 2. FIRST, reindex the company row to match the model's exact input structure.
-    # This ensures any columns that were in the training data but not this row are added as NaN.
-    company_row = company_row.reindex(columns=model_columns)
+    # 2. Reindex FIRST to ensure the row has the same structure as the training data.
+    # This adds any missing columns as NaN.
+    company_row_structured = company_row.reindex(columns=model_columns)
 
-    # 3. NOW, coerce all feature columns in the structurally-correct row to their correct dtype.
-    # This prevents dtypes from being misinterpreted.
+    # 3. NOW, coerce dtypes on the structurally-correct row.
+    # This is the same logic as in train_and_score, ensuring consistency.
     for col in model_features['numeric']:
-        if col in company_row.columns:
-            company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+        if col in company_row_structured.columns:
+            company_row_structured[col] = pd.to_numeric(company_row_structured[col], errors='coerce')
         
-    for col in model_features['categorical'] + model_features['text']:
-        if col in company_row.columns:
-            # Fill NA before converting to string to avoid 'nan' strings
-            company_row[col] = company_row[col].fillna('Unknown').astype(str)
+    for col in model_features['categorical']:
+        if col in company_row_structured.columns:
+            company_row_structured[col] = company_row_structured[col].fillna('Unknown').astype(str)
+            
+    for col in model_features['text']:
+        if col in company_row_structured.columns:
+            company_row_structured[col] = company_row_structured[col].fillna('').astype(str)
 
-    # The preprocessor's internal SimpleImputer will handle any NaNs created by reindexing or coercion.
+    # The preprocessor's internal SimpleImputer will handle any NaNs in numeric columns.
     # --- END FIX ---
 
     try:
-        transformed_row = preprocessor.transform(company_row)
+        transformed_row = preprocessor.transform(company_row_structured)
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
         st.write("Debug Info: Data types of the row just before transformation:")
-        st.dataframe(company_row.dtypes.to_frame('Data Type').T)
+        st.dataframe(company_row_structured.dtypes.to_frame('Data Type').T)
         return None
 
     # Create the SHAP explainer
