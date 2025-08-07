@@ -41,7 +41,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: Added Prediction Explanation Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -93,15 +92,79 @@ def get_column_mapping(_model, columns):
 
 
 # --- Data Processing and Modeling ---
+def convert_to_usd(value):
+    """A robust function to convert a single currency string to a float."""
+    if pd.isna(value): return np.nan
+    if isinstance(value, (int, float)): return float(value)
+    if not isinstance(value, str): return np.nan
+
+    exchange_rates = {'₹': 0.012, 'INR': 0.012, 'SGD': 0.79, 'A$': 0.66, 'AUD': 0.66, 'MYR': 0.24, 'IDR': 0.000062, '¥': 0.0070, 'JPY': 0.0070, 'CNY': 0.14, '€': 1.08, 'EUR': 1.08, '$': 1.0}
+    
+    value_cleaned = value.strip().replace(',', '')
+    if value_cleaned in ['-', '—', 'Undisclosed']: return np.nan
+    
+    if ' to ' in value_cleaned.lower(): value_cleaned = value_cleaned.lower().split(' to ')[0].strip()
+    elif '-' in value_cleaned and not value_cleaned.startswith('-'): value_cleaned = value_cleaned.split('-')[0].strip()
+
+    multiplier = 1.0
+    if 'B' in value_cleaned.upper(): multiplier = 1_000_000_000
+    elif 'M' in value_cleaned.upper(): multiplier = 1_000_000
+    elif 'K' in value_cleaned.upper(): multiplier = 1_000
+    
+    numeric_part_str = re.sub(r'[^\d\.]', '', value_cleaned)
+    if not numeric_part_str: return np.nan
+    
+    try: numeric_value = float(numeric_part_str)
+    except (ValueError, TypeError): return np.nan
+    
+    rate = 1.0
+    for symbol, r in exchange_rates.items():
+        if symbol in value_cleaned:
+            rate = r
+            break
+    return numeric_value * multiplier * rate
+
 def full_data_prep(df):
     """
-    Loads a dataframe and performs basic cleaning.
+    Loads a dataframe and performs all cleaning and feature engineering.
     """
     df = df.copy()
     df.columns = [col.strip() for col in df.columns]
-    # Convert all object columns to string to prevent mixed type errors later
-    for col in df.select_dtypes(include=['object']).columns:
-        df[col] = df[col].astype(str).fillna('Unknown')
+
+    # 1. Clean Headquarters Location
+    if 'Headquarters Location' in df.columns:
+        df['Headquarters Country'] = df['Headquarters Location'].apply(lambda loc: loc.split(',')[-1].strip() if isinstance(loc, str) else 'Unknown')
+
+    # 2. Create Top Industry
+    industry_priority = ['AI', 'Fintech', 'HealthTech', 'F&B & AgriTech', 'DeepTech & IoT', 'MarTech', 'Web3', 'Mobility & Logistics', 'Proptech', 'SaaS', 'EdTech', 'Ecommerce', 'HRTech']
+    industry_map = {'Artificial Intelligence (AI)': 'AI', 'FinTech': 'Fintech', 'AgTech': 'F&B & AgriTech', 'Food and Beverage': 'F&B & AgriTech', 'Internet of Things': 'DeepTech & IoT', 'Logistics': 'Mobility & Logistics', 'E-Commerce': 'Ecommerce', 'Human Resources': 'HRTech', 'PropTech': 'Proptech', 'Edutech': 'EdTech'}
+    def get_top_industry(row):
+        combined_industries = f"{row.get('Industry Groups', '')} {row.get('Industries', '')}"
+        for industry in industry_priority:
+            if re.search(r'\b' + re.escape(industry) + r'\b', combined_industries, re.IGNORECASE): return industry
+        for term, top_industry in industry_map.items():
+            if term in combined_industries: return top_industry
+        return 'Other'
+    df['Top Industry'] = df.apply(get_top_industry, axis=1)
+
+    # 3. Clean Date Columns
+    if 'Founded Date' in df.columns:
+        df['Founded Year'] = pd.to_numeric(df['Founded Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
+    if 'Exit Date' in df.columns:
+        df['Exit Year'] = pd.to_numeric(df['Exit Date'].astype(str).str.extract(r'(\d{4})').iloc[:, 0], errors='coerce')
+
+    # 4. Convert all monetary data to USD
+    money_cols = ['Last Funding Amount', 'Total Equity Funding Amount', 'Total Funding Amount']
+    for col in money_cols:
+        if col in df.columns:
+            new_col_name = f"{col} (USD)"
+            df[new_col_name] = df[col].apply(convert_to_usd)
+            df[new_col_name] = df[new_col_name].fillna(0)
+
+    # 5. Create the final 'Exit' column
+    if 'Exit' not in df.columns and 'Exit Year' in df.columns and 'Funding Status' in df.columns:
+        df['Exit'] = df.apply(lambda row: 1.0 if pd.notna(row['Exit Year']) or row['Funding Status'] in ['M&A', 'IPO'] else 0.0, axis=1)
+    
     return df
 
 def train_and_score():
