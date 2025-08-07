@@ -228,80 +228,72 @@ def get_feature_importance_plot():
 
 def explain_single_prediction(company_name):
     """Generates a SHAP plot to explain the prediction for a single company."""
+    # --- Essential checks ---
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
-    
-    if 'prediction_data_cleaned' not in st.session_state:
-        st.error("Please run 'train model' first to generate scores and prepare data.")
+    if 'prediction_data' not in st.session_state:
+        st.error("Please upload prediction data first.")
+        return None
+    if 'model_features' not in st.session_state or 'model_column_order' not in st.session_state:
+        st.error("Model features or column order not found. Please retrain the model.")
         return None
 
-    # These must exist if the above checks pass
+    # --- Load necessary objects from session state ---
     model = st.session_state.trained_model
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
     model_features = st.session_state.model_features
-    
-    # --- DEFINITIVE FIX: Use the CLEANED prediction data ---
-    df_predict = st.session_state.prediction_data_cleaned.copy()
+    model_columns = st.session_state.model_column_order
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
-    # Find the company row using .loc for safety
-    company_row = df_predict.loc[df_predict[id_col] == company_name].copy()
-    if company_row.empty:
+    # --- Use the ORIGINAL prediction data to find the raw row ---
+    df_predict_raw = st.session_state.prediction_data.copy()
+    
+    company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name].copy()
+    if company_row_raw.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # --- REDUNDANT BUT SAFE: Re-apply data prep steps ---
-    # This ensures that even if slicing the row changed a dtype, it's corrected.
-    # 1. Get the column order the model was trained on
-    model_columns = st.session_state.get('model_column_order')
-    if not model_columns:
-        st.error("Model column order not found. Please retrain the model to use this feature.")
-        return None
-        
-    # 2. Reindex FIRST to ensure the row has the same structure as the training data.
-    company_row = company_row.reindex(columns=model_columns)
+    # --- Recreate the exact data preparation steps for this single row ---
+    # 1. Reindex FIRST to match the training data's structure.
+    company_row_prepared = company_row_raw.reindex(columns=model_columns)
 
-    # 3. NOW, coerce dtypes on the structurally-correct row.
+    # 2. NOW, coerce dtypes on the structurally-correct row.
     for col in model_features['numeric']:
-        if col in company_row.columns:
-            company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+        if col in company_row_prepared.columns:
+            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
         
     for col in model_features['categorical']:
-        if col in company_row.columns:
-            company_row[col] = company_row[col].fillna('Unknown').astype(str)
+        if col in company_row_prepared.columns:
+            company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
             
     for col in model_features['text']:
-        if col in company_row.columns:
-            company_row[col] = company_row[col].fillna('').astype(str)
-    # --- END FIX ---
+        if col in company_row_prepared.columns:
+            company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
 
+    # --- Transform and Explain ---
     try:
-        transformed_row = preprocessor.transform(company_row)
+        transformed_row = preprocessor.transform(company_row_prepared)
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
         st.write("Debug Info: Data types of the row just before transformation:")
-        st.dataframe(company_row.dtypes.to_frame('Data Type').T)
+        st.dataframe(company_row_prepared.dtypes.to_frame('Data Type').T)
         return None
 
-    # Create the SHAP explainer
     explainer = shap.TreeExplainer(classifier)
     shap_values = explainer.shap_values(transformed_row)
 
-    # Create a DataFrame for plotting
     shap_df = pd.DataFrame({
         'Feature': feature_names,
-        'SHAP Value': shap_values[1][0] # Index 1 for the "Success" class
+        'SHAP Value': shap_values[1][0]
     })
     shap_df['Feature'] = shap_df['Feature'].str.replace(r'.*__', '', regex=True)
     shap_df['Color'] = ['red' if v < 0 else 'green' for v in shap_df['SHAP Value']]
-    # Get the top 15 features with the largest impact (absolute SHAP value)
     shap_df = shap_df.reindex(shap_df['SHAP Value'].abs().sort_values(ascending=True).index).tail(15)
 
-    # Create the plot
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=shap_df['SHAP Value'],
