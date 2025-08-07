@@ -252,27 +252,27 @@ def explain_single_prediction(company_name):
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # --- FINAL ROBUST FIX: The order of operations is critical ---
+    # --- FINAL ROBUST FIX v2: The order of operations is critical ---
     # 1. Get the column order the model was trained on
     model_columns = st.session_state.get('model_column_order')
     if not model_columns:
         st.error("Model column order not found. Please retrain the model to use this feature.")
         return None
         
-    # 2. Coerce all feature columns in the original row to their correct dtype FIRST.
-    # This prevents dtypes from being misinterpreted after slicing.
+    # 2. FIRST, reindex the company row to match the model's exact input structure.
+    # This ensures any columns that were in the training data but not this row are added as NaN.
+    company_row = company_row.reindex(columns=model_columns)
+
+    # 3. NOW, coerce all feature columns in the structurally-correct row to their correct dtype.
+    # This prevents dtypes from being misinterpreted.
     for col in model_features['numeric']:
         if col in company_row.columns:
             company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
-            
+        
     for col in model_features['categorical'] + model_features['text']:
         if col in company_row.columns:
             # Fill NA before converting to string to avoid 'nan' strings
             company_row[col] = company_row[col].fillna('Unknown').astype(str)
-
-    # 3. NOW, reindex the company row to match the model's exact input structure.
-    # This ensures any columns that were in the training data but not this row are added as NaN.
-    company_row = company_row.reindex(columns=model_columns)
 
     # The preprocessor's internal SimpleImputer will handle any NaNs created by reindexing or coercion.
     # --- END FIX ---
