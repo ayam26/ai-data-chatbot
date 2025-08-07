@@ -178,6 +178,10 @@ def train_and_score():
 
     X_train = df_train.drop(columns=[target], errors='ignore')
     y_train = df_train[target]
+    
+    # Save the column order the model was trained on
+    st.session_state.model_column_order = X_train.columns.tolist()
+
     model.fit(X_train, y_train)
     st.session_state.trained_model = model
 
@@ -248,15 +252,21 @@ def explain_single_prediction(company_name):
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # --- ROBUST FIX: Ensure all feature columns have the correct dtype ---
-    # This is critical because slicing a single row can sometimes alter dtypes.
-    
-    # Coerce numeric columns
+    # --- ROBUST FIX: Enforce both column structure and dtypes ---
+    # 1. Get the column order the model was trained on
+    model_columns = st.session_state.get('model_column_order')
+    if not model_columns:
+        st.error("Model column order not found. Please retrain the model to use this feature.")
+        return None
+        
+    # 2. Reindex the company row to match the model's exact input structure
+    company_row = company_row.reindex(columns=model_columns)
+
+    # 3. Coerce all feature columns to their correct dtype
     for col in model_features['numeric']:
         if col in company_row.columns:
             company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
             
-    # Coerce categorical and text columns to string
     for col in model_features['categorical'] + model_features['text']:
         if col in company_row.columns:
             company_row[col] = company_row[col].astype(str).fillna('Unknown')
@@ -267,8 +277,8 @@ def explain_single_prediction(company_name):
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
-        st.write("Data types of the row being transformed:")
-        st.write(company_row.dtypes.to_frame('Data Type'))
+        st.write("Debug Info: Data types of the row just before transformation:")
+        st.dataframe(company_row.dtypes.to_frame('Data Type').T)
         return None
 
     # Create the SHAP explainer
@@ -349,6 +359,8 @@ if "prediction_data" not in st.session_state: st.session_state.prediction_data =
 if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
 if "trained_model" not in st.session_state: st.session_state.trained_model = None
 if "model_features" not in st.session_state: st.session_state.model_features = None
+if "model_column_order" not in st.session_state: st.session_state.model_column_order = None
+
 
 with st.sidebar:
     st.header("1. Upload Data")
