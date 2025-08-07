@@ -232,27 +232,34 @@ def explain_single_prediction(company_name):
         st.error("Please run the 'train model' command first to generate scores.")
         return None
 
+    # These must exist if the above checks pass
     model = st.session_state.trained_model
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
+    model_features = st.session_state.model_features
     
     df_predict = st.session_state.prediction_data_cleaned.copy()
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
-    company_row = df_predict[df_predict[id_col] == company_name].copy()
+    # Find the company row using .loc for safety
+    company_row = df_predict.loc[df_predict[id_col] == company_name].copy()
     if company_row.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
 
-    # --- FIX: Explicitly ensure correct dtypes for the single row ---
-    # This prevents the "Cannot cast ufunc 'isnan'..." error by making sure
-    # numeric columns are actually numeric before transformation.
-    if 'model_features' in st.session_state and st.session_state.model_features is not None:
-        numeric_features = st.session_state.model_features['numeric']
-        for col in numeric_features:
-            if col in company_row.columns:
-                company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+    # --- ROBUST FIX: Ensure all feature columns have the correct dtype ---
+    # This is critical because slicing a single row can sometimes alter dtypes.
+    
+    # Coerce numeric columns
+    for col in model_features['numeric']:
+        if col in company_row.columns:
+            company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+            
+    # Coerce categorical and text columns to string
+    for col in model_features['categorical'] + model_features['text']:
+        if col in company_row.columns:
+            company_row[col] = company_row[col].astype(str).fillna('Unknown')
     # --- END FIX ---
 
     try:
@@ -260,6 +267,8 @@ def explain_single_prediction(company_name):
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
+        st.write("Data types of the row being transformed:")
+        st.write(company_row.dtypes.to_frame('Data Type'))
         return None
 
     # Create the SHAP explainer
