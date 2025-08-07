@@ -41,7 +41,6 @@ def get_ai_model():
 def get_ai_response(model, prompt, df_columns):
     """Uses the LLM to generate a command based on user intent."""
     if model is None: return "ERROR: AI model is not configured."
-    # --- NEW: Added Prediction Explanation Mode ---
     system_prompt = f"""
     You are an expert data analysis AI. Your job is to translate natural language into a single, executable line of Python code. You operate in several modes.
 
@@ -234,6 +233,16 @@ def explain_single_prediction(company_name):
     if company_row.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
+
+    # --- FIX: Apply the same data type conversions as in train_and_score ---
+    features = st.session_state.model_features
+    for col in features['numeric']:
+        if col in company_row.columns: company_row[col] = pd.to_numeric(company_row[col], errors='coerce')
+    for col in features['categorical']:
+        if col in company_row.columns: company_row[col] = company_row[col].astype(str).fillna('Unknown')
+    for col in features['text']:
+        if col in company_row.columns: company_row[col] = company_row[col].astype(str).fillna('')
+    # --- End Fix ---
 
     # Transform the single row of data
     transformed_row = preprocessor.transform(company_row)
