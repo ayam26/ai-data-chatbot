@@ -248,7 +248,7 @@ def explain_single_prediction(company_name):
     # --- FIX: Explicitly ensure correct dtypes for the single row ---
     # This prevents the "Cannot cast ufunc 'isnan'..." error by making sure
     # numeric columns are actually numeric before transformation.
-    if 'model_features' in st.session_state:
+    if 'model_features' in st.session_state and st.session_state.model_features is not None:
         numeric_features = st.session_state.model_features['numeric']
         for col in numeric_features:
             if col in company_row.columns:
