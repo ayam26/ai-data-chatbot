@@ -106,7 +106,8 @@ def full_data_prep(df):
         df[col] = df[col].astype(str).fillna('Unknown')
     return df
 
-@st.cache_data
+# CRITICAL FIX: The @st.cache_data decorator has been removed from this function
+# to prevent state management issues where the model is not saved correctly.
 def train_and_score():
     """Dynamically identifies features and trains the model based on user-confirmed column mappings."""
     if 'training_data' not in st.session_state or st.session_state.training_data is None:
