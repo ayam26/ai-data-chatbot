@@ -282,11 +282,15 @@ def explain_single_prediction(company_name=None, row_index=None):
             company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
         elif col in model_features['text']:
             company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
+        else:
+            # For safety, coerce other columns to numeric or fill with NaN
+            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
+
 
     # Debug: show dtypes and data just before transformation
-    st.write("Debug: dtypes of data before transformation")
+    st.write("Dtypes before transform:")
     st.write(company_row_prepared.dtypes)
-    st.write("Debug: sample data before transformation")
+    st.write("Data before transform:")
     st.write(company_row_prepared)
     
     try:
