@@ -33,7 +33,7 @@ def get_ai_model():
             st.stop()
         genai.configure(api_key=api_key)
         # Using a specific, stable model version
-        return genai.GenerativeModel('gemini-1.5-flash')
+        return genai.GenerativeModel('gemini-2.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
         st.stop()
