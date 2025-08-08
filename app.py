@@ -1,4 +1,3 @@
-# app.py (corrected)
 import streamlit as st
 import pandas as pd
 import os
@@ -123,7 +122,6 @@ def train_and_score():
     if target == "N/A" or target not in df_train.columns:
         return None, "ERROR: A valid 'Target Variable' must be selected in the sidebar."
         
-    # Drop rows with missing target values (do NOT coerce target to numeric; keep labels as-is)
     df_train.dropna(subset=[target], inplace=True)
     if df_train.empty:
         return None, f"ERROR: After removing rows with missing '{target}' values, the training dataset is empty."
@@ -189,12 +187,8 @@ def train_and_score():
     model.fit(X_train, y_train)
     st.session_state.trained_model = model
 
-    # oob_score_ exists because we set oob_score=True
-    accuracy = model.named_steps['classifier'].oob_score_ if hasattr(model.named_steps['classifier'], 'oob_score_') else None
-    if accuracy is not None:
-        message = f"✅ Model trained with an estimated accuracy of {accuracy:.2%}. You can now score the prediction data or analyze feature importance."
-    else:
-        message = "✅ Model trained. You can now score the prediction data or analyze feature importance."
+    accuracy = model.named_steps['classifier'].oob_score_
+    message = f"✅ Model trained with an estimated accuracy of {accuracy:.2%}. You can now score the prediction data or analyze feature importance."
     
     # Save the cleaned prediction data to session state for explainability
     st.session_state.prediction_data_cleaned = df_predict.copy()
@@ -264,8 +258,7 @@ def explain_single_prediction(company_name=None, row_index=None):
     company_row = None
 
     if company_name:
-        # match exactly; if you want case-insensitive, adjust here
-        company_row = df_predict_cleaned.loc[df_predict_cleaned.get(id_col, '') == company_name]
+        company_row = df_predict_cleaned.loc[df_predict_cleaned[id_col] == company_name]
         if company_row.empty:
             st.error(f"Company '{company_name}' not found in the prediction data.")
             return None
@@ -295,11 +288,6 @@ def explain_single_prediction(company_name=None, row_index=None):
     # --- 5. Transform and Explain ---
     try:
         transformed_row = preprocessor.transform(company_row_prepared)
-        # --- SHAP expects numerical floats; ensure we pass it a dense float array ---
-        if hasattr(transformed_row, "toarray"):
-            transformed_row = transformed_row.toarray()
-        # force numeric dtype (this will raise if truly non-numeric values exist)
-        transformed_row = np.asarray(transformed_row, dtype=float)
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
@@ -310,13 +298,216 @@ def explain_single_prediction(company_name=None, row_index=None):
     explainer = shap.TreeExplainer(classifier)
     shap_values = explainer.shap_values(transformed_row)
 
-    # If classifier has two classes, shap_values is a list; we pick the 'positive' class index 1
-    idx_to_use = 1 if isinstance(shap_values, list) and len(shap_values) > 1 else 0
-    shap_vals_for_row = shap_values[idx_to_use][0] if isinstance(shap_values, list) else shap_values[0]
-
     shap_df = pd.DataFrame({
         'Feature': feature_names,
-        'SHAP Value': shap_vals_for_row
+        'SHAP Value': shap_values[1][0]
     })
     shap_df['Feature'] = shap_df['Feature'].str.replace(r'.*__', '', regex=True)
     shap_df['Color'] = ['red' if v < 0 else 'green' for v in shap_df['SHAP Value']]
+    shap_df = shap_df.reindex(shap_df['SHAP Value'].abs().sort_values(ascending=True).index).tail(15)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=shap_df['SHAP Value'],
+        y=shap_df['Feature'],
+        orientation='h',
+        marker_color=shap_df['Color']
+    ))
+    fig.update_layout(
+        title=f"Prediction Drivers for {company_name or f'Row {row_index}'}",
+        xaxis_title="SHAP Value (Impact on Success Probability)",
+        yaxis_title="Feature"
+    )
+    return fig
+
+
+def plot_correlation_heatmap():
+    """Calculates and plots a heatmap of correlations for numeric features."""
+    df = st.session_state.training_data
+    numeric_df = df.select_dtypes(include=np.number)
+    corr = numeric_df.corr()
+    fig = go.Figure(data=go.Heatmap(z=corr.values, x=corr.columns, y=corr.columns, colorscale='Viridis'))
+    fig.update_layout(title='Correlation Between Financial Metrics and Exits')
+    return fig
+
+def plot_comparison_boxplot(y_col):
+    """Compares the distribution of a numeric column for exited vs. non-exited companies."""
+    df = st.session_state.training_data
+    if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
+        st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
+        return None
+    if y_col not in df.columns:
+        st.error(f"Column '{y_col}' not found in the data. Available numeric columns: {df.select_dtypes(include=np.number).columns.tolist()}")
+        return None
+    target = st.session_state.column_mapping['TARGET_VARIABLE']
+    fig = px.box(df, x=target, y=y_col, title=f'Comparison of {y_col} for Exited vs. Non-Exited Companies')
+    return fig
+
+def plot_interactive_scatter(x_col, y_col):
+    """Creates a scatter plot to show the interaction between two variables, colored by exit type."""
+    df = st.session_state.training_data
+    if 'column_mapping' not in st.session_state or st.session_state.column_mapping['TARGET_VARIABLE'] == 'N/A':
+        st.error("Please ensure a Target Variable is identified in the sidebar before plotting.")
+        return None
+    if x_col not in df.columns or y_col not in df.columns:
+        st.error(f"One or both columns ('{x_col}', '{y_col}') not found in the data. Please check available columns.")
+        return None
+    target = st.session_state.column_mapping['TARGET_VARIABLE']
+    fig = px.scatter(df, x=x_col, y=y_col, color=target, title=f'Interaction between {x_col} and {y_col}')
+    return fig
+
+# --- Streamlit App UI and Logic ---
+
+st.set_page_config(layout="wide")
+st.title("🚀 Autonomous AI Exit Predictor")
+st.caption("With fully automatic column mapping and advanced driver analysis.")
+
+# Initialize session state
+if "messages" not in st.session_state: st.session_state.messages = []
+if "training_data" not in st.session_state: st.session_state.training_data = None
+if "prediction_data" not in st.session_state: st.session_state.prediction_data = None
+if "column_mapping" not in st.session_state: st.session_state.column_mapping = None
+if "trained_model" not in st.session_state: st.session_state.trained_model = None
+if "model_features" not in st.session_state: st.session_state.model_features = None
+if "model_column_order" not in st.session_state: st.session_state.model_column_order = None
+
+
+with st.sidebar:
+    st.header("1. Upload Data")
+    train_file = st.file_uploader("Upload Training Data", type=["xlsx", "csv"], key="train")
+    if train_file:
+        with st.spinner("Processing Training Data..."):
+            try:
+                df_raw = pd.read_csv(train_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
+                st.session_state.training_data = full_data_prep(df_raw)
+                st.success(f"Loaded '{train_file.name}'.")
+            except Exception as e:
+                st.error(f"Error reading training file: {e}")
+
+
+    predict_file = st.file_uploader("Upload Prediction Data", type=["xlsx", "csv"], key="predict")
+    if predict_file:
+        with st.spinner("Processing Prediction Data..."):
+            try:
+                df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
+                st.session_state.prediction_data = full_data_prep(df_raw)
+                st.success(f"Loaded '{predict_file.name}'.")
+            except Exception as e:
+                st.error(f"Error reading prediction file: {e}")
+
+
+    if st.session_state.training_data is not None:
+        st.header("2. Confirm Column Roles")
+        st.info("Our AI suggests roles for your columns. Please confirm or correct them.")
+        
+        all_cols = ["N/A"] + st.session_state.training_data.columns.tolist()
+        
+        if st.session_state.column_mapping is None:
+            model = get_ai_model()
+            st.session_state.column_mapping = get_column_mapping(model, all_cols[1:])
+
+        mapping = st.session_state.column_mapping
+        
+        def get_index(key):
+            # Safely get the index, defaulting to 0 ('N/A') if not found
+            try:
+                return all_cols.index(mapping.get(key, "N/A"))
+            except ValueError:
+                return 0
+
+        mapping['TARGET_VARIABLE'] = st.selectbox("Target Variable (what to predict)", all_cols, index=get_index('TARGET_VARIABLE'))
+        mapping['ORGANIZATION_IDENTIFIER'] = st.selectbox("Organization Identifier (company name)", all_cols, index=get_index('ORGANIZATION_IDENTIFIER'))
+        mapping['TEXT_DESCRIPTION'] = st.selectbox("Text Description Column", all_cols, index=get_index('TEXT_DESCRIPTION'))
+        mapping['CATEGORICAL_INDUSTRY'] = st.selectbox("Categorical Industry Column", all_cols, index=get_index('CATEGORICAL_INDUSTRY'))
+
+
+# --- Main chat interface ---
+if not st.session_state.messages:
+    st.info(
+        """
+        **Welcome to the Autonomous AI Exit Predictor!**
+
+        To get started, upload your `Training Data` and `Prediction Data` in the sidebar. 
+        Then, confirm the column roles identified by the AI.
+        
+        Once loaded, you can use commands like:
+
+        - **`train model`**: To train the predictor and score your new companies.
+        - **`what are the main drivers of success?`**: To see which factors are most important.
+        - **`show me the correlation heatmap`**: To visualize how numerical features relate.
+        - **`compare the means for Total Funding Amount`**: To compare a metric for exited vs. non-exited companies.
+        - **`plot the interaction between Founded Year and Total Funding Amount`**: To see how two variables interact.
+        - **`explain the score for [Company Name]`**: To see the specific drivers for a single company.
+        - **`explain score for row [Number]`**: To see drivers for a company by its row number.
+        """
+    )
+
+for i, message in enumerate(st.session_state.messages):
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        if message.get("data") is not None: st.dataframe(message["data"])
+        if message.get("chart") is not None: st.plotly_chart(message["chart"], use_container_width=True, key=f"history_chart_{i}")
+
+if prompt := st.chat_input("What would you like to do? (e.g., 'train model')"):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    with st.chat_message("assistant"):
+        
+        if st.session_state.training_data is None:
+            st.warning("Please upload at least a training file first.")
+            st.stop()
+        
+        context_df = st.session_state.training_data
+        
+        with st.spinner("🧠 AI is thinking..."):
+            model = get_ai_model()
+            ai_response = get_ai_response(model, prompt, list(context_df.columns))
+            
+            # Clean the response to get executable code
+            cleaned_response = ai_response.replace("```python", "").replace("```", "").strip()
+            cleaned_response = cleaned_response.replace("`", "")
+            cleaned_response = cleaned_response.replace("‘", "'").replace("’", "'")
+
+            code_keywords = ['fig =', 'train_and_score', 'df =']
+            is_code = any(keyword in cleaned_response for keyword in code_keywords)
+
+            if cleaned_response.startswith("ERROR:"):
+                st.error(cleaned_response)
+                st.session_state.messages.append({"role": "assistant", "content": cleaned_response})
+            elif is_code:
+                st.code(cleaned_response, language="python")
+                
+                local_vars = {
+                    "df": context_df.copy(), "px": px, "go": go,
+                    "train_and_score": train_and_score, 
+                    "get_feature_importance_plot": get_feature_importance_plot,
+                    "plot_correlation_heatmap": plot_correlation_heatmap,
+                    "plot_comparison_boxplot": plot_comparison_boxplot,
+                    "plot_interactive_scatter": plot_interactive_scatter,
+                    "explain_single_prediction": explain_single_prediction
+                }
+                
+                try:
+                    exec(cleaned_response, globals(), local_vars)
+                    response_content, response_data, response_chart = "✅ Command executed.", None, None
+                    
+                    if local_vars.get("fig") is not None:
+                        response_chart = local_vars["fig"]
+                        response_content = f"✅ Here is your analysis for '{prompt}'"
+                    elif 'results_df' in local_vars:
+                        response_data, response_content = local_vars["results_df"], local_vars["message"]
+                    
+                    st.markdown(response_content)
+                    if response_data is not None: st.dataframe(response_data)
+                    if response_chart is not None: st.plotly_chart(response_chart, use_container_width=True, key="new_chart")
+                    st.session_state.messages.append({"role": "assistant", "content": response_content, "data": response_data, "chart": response_chart})
+                
+                except Exception as e:
+                    error_message = f"❌ Error executing code: {e}"
+                    st.error(error_message)
+                    st.session_state.messages.append({"role": "assistant", "content": error_message})
+            else: 
+                st.markdown(cleaned_response)
+                st.session_state.messages.append({"role": "assistant", "content": cleaned_response})
