@@ -233,10 +233,8 @@ def get_feature_importance_plot():
 def explain_single_prediction(company_name=None, row_index=None):
     """
     Generates a SHAP plot to explain the prediction for a single company,
-    accepting either a company name or a row index.
-    This enhanced version includes detailed debug info to track dtype issues.
+    accepting either a name or a row index.
     """
-    # --- 1. Essential checks ---
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
@@ -247,7 +245,6 @@ def explain_single_prediction(company_name=None, row_index=None):
         st.error("Model features or column order not found. Please retrain the model.")
         return None
 
-    # --- 2. Load necessary objects from session state ---
     model = st.session_state.trained_model
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
@@ -255,8 +252,7 @@ def explain_single_prediction(company_name=None, row_index=None):
     model_columns = st.session_state.model_column_order
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
-    
-    # --- 3. Find the single row from the CLEANED prediction data ---
+
     df_predict_cleaned = st.session_state.prediction_data_cleaned.copy()
     company_row = None
 
@@ -274,26 +270,31 @@ def explain_single_prediction(company_name=None, row_index=None):
     else:
         st.error("Please provide a company name or a row index to explain.")
         return None
-    
-    # --- 4. Safeguard: Re-apply structure and dtypes ---
+
+    # Reindex columns to model training order
     company_row_prepared = company_row.reindex(columns=model_columns)
 
-    for col in model_columns:
-        if col in model_features['numeric']:
-            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
-        elif col in model_features['categorical']:
-            company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
-        elif col in model_features['text']:
-            company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
-            
-    # --- 5. Transform and Explain ---
+    # --- The key fix: force numeric columns to numeric dtype ---
+    for col in model_features['numeric']:
+        company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
+
+    # Also clean categorical and text columns just in case
+    for col in model_features['categorical']:
+        company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
+    for col in model_features['text']:
+        company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
+
+    # Debug: show dtypes before transformation
+    st.write("Debug: dtypes of data before transformation")
+    st.write(company_row_prepared.dtypes)
+
     try:
         transformed_row = preprocessor.transform(company_row_prepared)
         feature_names = preprocessor.get_feature_names_out()
     except Exception as e:
         st.error(f"Failed to transform data for explanation: {e}")
-        st.write("Debug Info: Data types of the row just before transformation:")
-        st.dataframe(company_row_prepared.dtypes.to_frame('Data Type').T)
+        st.write("Debug Info: Data causing the error:")
+        st.dataframe(company_row_prepared)
         return None
 
     explainer = shap.TreeExplainer(classifier)
