@@ -33,7 +33,7 @@ def get_ai_model():
             st.stop()
         genai.configure(api_key=api_key)
         # Using a specific, stable model version
-        return genai.GenerativeModel('gemini-2.5-flash')
+        return genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         st.error(f"❌ Failed to configure AI model: {e}")
         st.stop()
@@ -391,7 +391,7 @@ with st.sidebar:
     if predict_file:
         with st.spinner("Processing Prediction Data..."):
             try:
-                df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
+                df_raw = pd.read_csv(predict_file, na_values=['—']) if train_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
                 st.session_state.prediction_data = full_data_prep(df_raw)
                 st.success(f"Loaded '{predict_file.name}'.")
             except Exception as e:
