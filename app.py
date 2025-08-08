@@ -106,6 +106,7 @@ def full_data_prep(df):
         df[col] = df[col].astype(str).fillna('Unknown')
     return df
 
+@st.cache_data
 def train_and_score():
     """Dynamically identifies features and trains the model based on user-confirmed column mappings."""
     if 'training_data' not in st.session_state or st.session_state.training_data is None:
@@ -228,6 +229,7 @@ def get_feature_importance_plot():
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
 
+@st.cache_data
 def explain_single_prediction(company_name=None, row_index=None):
     """
     Generates a SHAP plot to explain the prediction for a single company,
