@@ -227,8 +227,11 @@ def get_feature_importance_plot():
     return fig
 
 def explain_single_prediction(company_name):
-    """Generates a SHAP plot to explain the prediction for a single company."""
-    # --- Essential checks ---
+    """
+    Generates a SHAP plot to explain the prediction for a single company.
+    This function is self-contained to prevent dtype errors from slicing.
+    """
+    # --- 1. Essential checks ---
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
@@ -239,7 +242,7 @@ def explain_single_prediction(company_name):
         st.error("Model features or column order not found. Please retrain the model.")
         return None
 
-    # --- Load necessary objects from session state ---
+    # --- 2. Load necessary objects from session state ---
     model = st.session_state.trained_model
     preprocessor = model.named_steps['preprocessor']
     classifier = model.named_steps['classifier']
@@ -248,32 +251,32 @@ def explain_single_prediction(company_name):
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
-    # --- Use the ORIGINAL prediction data to find the raw row ---
+    # --- 3. Find the single raw row from the original prediction data ---
     df_predict_raw = st.session_state.prediction_data.copy()
     
-    company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name].copy()
+    # Use .loc to get the row as a DataFrame
+    company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name]
     if company_row_raw.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
+    
+    # --- 4. Build a perfectly clean DataFrame for this one company ---
+    # Create a new, empty DataFrame with the exact structure the model expects.
+    company_row_prepared = pd.DataFrame(columns=model_columns, index=company_row_raw.index)
 
-    # --- Recreate the exact data preparation steps for this single row ---
-    # 1. Reindex FIRST to match the training data's structure.
-    company_row_prepared = company_row_raw.reindex(columns=model_columns)
-
-    # 2. NOW, coerce dtypes on the structurally-correct row.
-    for col in model_features['numeric']:
-        if col in company_row_prepared.columns:
-            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
-        
-    for col in model_features['categorical']:
-        if col in company_row_prepared.columns:
-            company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
+    # Populate the new DataFrame column by column, ensuring correct dtypes.
+    for col in model_columns:
+        if col in model_features['numeric']:
+            company_row_prepared[col] = pd.to_numeric(company_row_raw[col], errors='coerce')
+        elif col in model_features['categorical']:
+            company_row_prepared[col] = company_row_raw[col].fillna('Unknown').astype(str)
+        elif col in model_features['text']:
+            company_row_prepared[col] = company_row_raw[col].fillna('').astype(str)
+        else:
+            # For any other columns (like the ID column if it was included in X_train)
+            company_row_prepared[col] = company_row_raw[col]
             
-    for col in model_features['text']:
-        if col in company_row_prepared.columns:
-            company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
-
-    # --- Transform and Explain ---
+    # --- 5. Transform and Explain ---
     try:
         transformed_row = preprocessor.transform(company_row_prepared)
         feature_names = preprocessor.get_feature_names_out()
