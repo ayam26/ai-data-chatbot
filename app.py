@@ -106,8 +106,6 @@ def full_data_prep(df):
         df[col] = df[col].astype(str).fillna('Unknown')
     return df
 
-# CRITICAL FIX: The @st.cache_data decorator has been removed from this function
-# to prevent state management issues where the model is not saved correctly.
 def train_and_score():
     """Dynamically identifies features and trains the model based on user-confirmed column mappings."""
     if 'training_data' not in st.session_state or st.session_state.training_data is None:
@@ -392,7 +390,9 @@ with st.sidebar:
     if predict_file:
         with st.spinner("Processing Prediction Data..."):
             try:
-                df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(train_file, na_values=['—'])
+                # --- THIS IS THE BUG FIX ---
+                # It now correctly reads from predict_file for both CSV and Excel
+                df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
                 st.session_state.prediction_data = full_data_prep(df_raw)
                 st.success(f"Loaded '{predict_file.name}'.")
             except Exception as e:
