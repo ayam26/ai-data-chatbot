@@ -273,20 +273,22 @@ def explain_single_prediction(company_name=None, row_index=None):
     # Reindex columns to model training order
     company_row_prepared = company_row.reindex(columns=model_columns)
 
-    # --- The key fix: force numeric columns to numeric dtype ---
-    for col in model_features['numeric']:
-        company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
+    # --- YOUR FIX APPLIED HERE ---
+    # Force correct data types on the single row to prevent transformation errors.
+    for col in model_columns:
+        if col in model_features['numeric']:
+            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
+        elif col in model_features['categorical']:
+            company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
+        elif col in model_features['text']:
+            company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
 
-    # Also clean categorical and text columns just in case
-    for col in model_features['categorical']:
-        company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
-    for col in model_features['text']:
-        company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
-
-    # Debug: show dtypes before transformation
+    # Debug: show dtypes and data just before transformation
     st.write("Debug: dtypes of data before transformation")
     st.write(company_row_prepared.dtypes)
-
+    st.write("Debug: sample data before transformation")
+    st.write(company_row_prepared)
+    
     try:
         transformed_row = preprocessor.transform(company_row_prepared)
         feature_names = preprocessor.get_feature_names_out()
@@ -390,8 +392,6 @@ with st.sidebar:
     if predict_file:
         with st.spinner("Processing Prediction Data..."):
             try:
-                # --- THIS IS THE BUG FIX ---
-                # It now correctly reads from predict_file for both CSV and Excel
                 df_raw = pd.read_csv(predict_file, na_values=['—']) if predict_file.name.endswith('.csv') else pd.read_excel(predict_file, na_values=['—'])
                 st.session_state.prediction_data = full_data_prep(df_raw)
                 st.success(f"Loaded '{predict_file.name}'.")
