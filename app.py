@@ -235,8 +235,8 @@ def explain_single_prediction(company_name):
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
         st.error("You must train a model first.")
         return None
-    if 'prediction_data_cleaned' not in st.session_state:
-        st.error("Please run 'train model' to prepare the prediction data before explaining a score.")
+    if 'prediction_data' not in st.session_state:
+        st.error("Please upload prediction data first.")
         return None
     if 'model_features' not in st.session_state or 'model_column_order' not in st.session_state:
         st.error("Model features or column order not found. Please retrain the model.")
@@ -251,26 +251,30 @@ def explain_single_prediction(company_name):
     mapping = st.session_state.column_mapping
     id_col = mapping['ORGANIZATION_IDENTIFIER']
     
-    # --- 3. Find the single row from the CLEANED prediction data ---
-    df_predict_cleaned = st.session_state.prediction_data_cleaned.copy()
+    # --- 3. Find the single raw row from the original prediction data ---
+    df_predict_raw = st.session_state.prediction_data.copy()
     
-    company_row = df_predict_cleaned.loc[df_predict_cleaned[id_col] == company_name]
-    if company_row.empty:
+    # Use .loc to get the row as a DataFrame
+    company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name]
+    if company_row_raw.empty:
         st.error(f"Company '{company_name}' not found in the prediction data.")
         return None
     
-    # --- 4. Safeguard: Re-apply dtypes and structure ---
-    # Although we start from cleaned data, slicing can still alter dtypes.
-    # This ensures the row is perfect before transforming.
-    company_row_prepared = company_row.reindex(columns=model_columns)
+    # --- 4. Build a perfectly clean DataFrame for this one company ---
+    # Create a new, empty DataFrame with the exact structure the model expects.
+    company_row_prepared = pd.DataFrame(columns=model_columns, index=company_row_raw.index)
 
+    # Populate the new DataFrame column by column, ensuring correct dtypes.
     for col in model_columns:
         if col in model_features['numeric']:
-            company_row_prepared[col] = pd.to_numeric(company_row_prepared[col], errors='coerce')
+            company_row_prepared[col] = pd.to_numeric(company_row_raw[col], errors='coerce')
         elif col in model_features['categorical']:
-            company_row_prepared[col] = company_row_prepared[col].fillna('Unknown').astype(str)
+            company_row_prepared[col] = company_row_raw[col].fillna('Unknown').astype(str)
         elif col in model_features['text']:
-            company_row_prepared[col] = company_row_prepared[col].fillna('').astype(str)
+            company_row_prepared[col] = company_row_raw[col].fillna('').astype(str)
+        else:
+            # For any other columns (like the ID column if it was included in X_train)
+            company_row_prepared[col] = company_row_raw[col]
             
     # --- 5. Transform and Explain ---
     try:
