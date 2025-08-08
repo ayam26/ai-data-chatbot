@@ -233,7 +233,8 @@ def get_feature_importance_plot():
 def explain_single_prediction(company_name=None, row_index=None):
     """
     Generates a SHAP plot to explain the prediction for a single company,
-    accepting either a name or a row index.
+    accepting either a company name or a row index.
+    This enhanced version includes detailed debug info to track dtype issues.
     """
     # --- 1. Essential checks ---
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
@@ -275,8 +276,6 @@ def explain_single_prediction(company_name=None, row_index=None):
         return None
     
     # --- 4. Safeguard: Re-apply structure and dtypes ---
-    # Although we start from cleaned data, slicing can still alter dtypes.
-    # This ensures the row is perfect before transforming.
     company_row_prepared = company_row.reindex(columns=model_columns)
 
     for col in model_columns:
