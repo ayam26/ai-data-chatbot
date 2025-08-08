@@ -48,7 +48,8 @@ def get_ai_response(model, prompt, df_columns):
     **Modeling & Analysis:**
     - To "train model" or "predict", generate `results_df, message = train_and_score()`.
     - To "find drivers" or "explain the model", generate `fig = get_feature_importance_plot()`.
-    - To "explain the score for" a specific company, generate `fig = explain_single_prediction(company_name='Company Name')`, extracting the company name from the prompt.
+    - To "explain the score for" a specific company, generate `fig = explain_single_prediction(company_name='Company Name')`, extracting the company name.
+    - To "explain score for row", generate `fig = explain_single_prediction(row_index=Number)`, extracting the row number.
     - To "show correlation" or "heatmap", call `fig = plot_correlation_heatmap()`.
     - To "compare means" or "compare distributions", call `fig = plot_comparison_boxplot(y_col='column_name')`.
     - To see the "interaction between" two variables, call `fig = plot_interactive_scatter(x_col='col1', y_col='col2')`.
@@ -63,6 +64,7 @@ def get_ai_response(model, prompt, df_columns):
 
     **Examples:**
     - User: "explain the score for FutureTech" -> AI: `fig = explain_single_prediction(company_name='FutureTech')`
+    - User: "explain score for row 21" -> AI: `fig = explain_single_prediction(row_index=21)`
     """
     try:
         response = model.generate_content([system_prompt, prompt])
@@ -226,10 +228,10 @@ def get_feature_importance_plot():
     fig.update_layout(yaxis={'categoryorder':'total ascending'})
     return fig
 
-def explain_single_prediction(company_name):
+def explain_single_prediction(company_name=None, row_index=None):
     """
-    Generates a SHAP plot to explain the prediction for a single company.
-    This function is self-contained to prevent dtype errors from slicing.
+    Generates a SHAP plot to explain the prediction for a single company,
+    accepting either a name or a row index.
     """
     # --- 1. Essential checks ---
     if 'trained_model' not in st.session_state or st.session_state.trained_model is None:
@@ -249,22 +251,31 @@ def explain_single_prediction(company_name):
     model_features = st.session_state.model_features
     model_columns = st.session_state.model_column_order
     mapping = st.session_state.column_mapping
-    id_col = mapping['ORGANIZATION_IDENTIFIER']
     
     # --- 3. Find the single raw row from the original prediction data ---
     df_predict_raw = st.session_state.prediction_data.copy()
-    
-    # Use .loc to get the row as a DataFrame
-    company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name]
-    if company_row_raw.empty:
-        st.error(f"Company '{company_name}' not found in the prediction data.")
+    company_row_raw = None
+
+    if company_name:
+        id_col = mapping['ORGANIZATION_IDENTIFIER']
+        company_row_raw = df_predict_raw.loc[df_predict_raw[id_col] == company_name]
+        if company_row_raw.empty:
+            st.error(f"Company '{company_name}' not found in the prediction data.")
+            return None
+    elif row_index is not None:
+        try:
+            # .iloc requires a DataFrame, so we select the row and keep it as a DataFrame
+            company_row_raw = df_predict_raw.iloc[[row_index]]
+        except IndexError:
+            st.error(f"Row index {row_index} is out of bounds for the prediction data.")
+            return None
+    else:
+        st.error("Please provide a company name or a row index to explain.")
         return None
     
     # --- 4. Build a perfectly clean DataFrame for this one company ---
-    # Create a new, empty DataFrame with the exact structure the model expects.
     company_row_prepared = pd.DataFrame(columns=model_columns, index=company_row_raw.index)
 
-    # Populate the new DataFrame column by column, ensuring correct dtypes.
     for col in model_columns:
         if col in model_features['numeric']:
             company_row_prepared[col] = pd.to_numeric(company_row_raw[col], errors='coerce')
@@ -273,7 +284,6 @@ def explain_single_prediction(company_name):
         elif col in model_features['text']:
             company_row_prepared[col] = company_row_raw[col].fillna('').astype(str)
         else:
-            # For any other columns (like the ID column if it was included in X_train)
             company_row_prepared[col] = company_row_raw[col]
             
     # --- 5. Transform and Explain ---
@@ -305,7 +315,7 @@ def explain_single_prediction(company_name):
         marker_color=shap_df['Color']
     ))
     fig.update_layout(
-        title=f"Prediction Drivers for {company_name}",
+        title=f"Prediction Drivers for {company_name or f'Row {row_index}'}",
         xaxis_title="SHAP Value (Impact on Success Probability)",
         yaxis_title="Feature"
     )
@@ -429,6 +439,7 @@ if not st.session_state.messages:
         - **`compare the means for Total Funding Amount`**: To compare a metric for exited vs. non-exited companies.
         - **`plot the interaction between Founded Year and Total Funding Amount`**: To see how two variables interact.
         - **`explain the score for [Company Name]`**: To see the specific drivers for a single company.
+        - **`explain score for row [Number]`**: To see drivers for a company by its row number.
         """
     )
 
